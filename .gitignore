@@ -1,0 +1,12 @@
+node_modules
+.DS_Store
+.env
+.env.*
+!.env.example
+dist
+coverage
+.turbo
+.pnpm-store
+client/dist
+server/dist
+server/generated
