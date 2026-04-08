@@ -91,6 +91,20 @@ export async function getObjectStream(objectKey: string, range?: string) {
   );
 }
 
+export async function getVideoSnapshotStream(objectKey: string) {
+  const client = createClient();
+
+  return client.getStream(toClientObjectKey(objectKey), {
+    process: "video/snapshot,t_0,f_jpg,w_640,h_360,m_fast"
+  });
+}
+
+export async function headObject(objectKey: string) {
+  const client = createClient();
+
+  return client.head(toClientObjectKey(objectKey));
+}
+
 export async function uploadMultipartPart(objectKey: string, ossUploadId: string, partNumber: number, chunk: Buffer) {
   const client = createClient();
   const result = await client.uploadPart(

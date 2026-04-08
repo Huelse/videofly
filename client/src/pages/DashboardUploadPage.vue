@@ -12,6 +12,7 @@ const PARALLEL_UPLOAD_WORKERS = 4;
 const PART_UPLOAD_RETRY_COUNT = 3;
 const PART_UPLOAD_TIMEOUT_MS = 90_000;
 const MAX_VALIDATION_REUPLOAD_PASSES = 2;
+const EXPIRED_UPLOAD_MESSAGE = "Upload session expired in OSS. Please continue upload to resend all parts.";
 const form = reactive({
   title: "",
   filename: "",
@@ -32,6 +33,7 @@ const videoPosterDataUrl = ref<string>("");
 const previewVideoRef = ref<HTMLVideoElement | null>(null);
 const uploadHistory = ref<UploadHistoryItem[]>([]);
 const uploadRuntimeState = ref<"idle" | "uploading" | "paused">("idle");
+const uploadFlowStarted = ref(false);
 const loading = reactive({
   init: false,
   part: false,
@@ -96,6 +98,18 @@ const canUploadParts = computed(() => {
   );
 });
 
+const canStartUpload = computed(() => {
+  return (
+    authStore.canUpload.value &&
+    Boolean(selectedFile.value) &&
+    uploadRuntimeState.value !== "uploading" &&
+    !loading.init &&
+    !loading.part &&
+    !loading.complete &&
+    !loading.cancel
+  );
+});
+
 const canPause = computed(() => {
   return uploadRuntimeState.value === "uploading" && !loading.cancel;
 });
@@ -106,6 +120,10 @@ const canCancel = computed(() => {
   }
 
   return uploadSession.value.status !== "COMPLETED" && uploadSession.value.status !== "CANCELED";
+});
+
+const showProgressPanel = computed(() => {
+  return uploadFlowStarted.value || isUploading.value || isPaused.value || progress.value > 0 || loading.complete;
 });
 
 function isSessionReadyToComplete(session: UploadSessionState | null) {
@@ -199,6 +217,7 @@ async function handleFileChange(uploadFile: UploadFile, uploadFiles: UploadFiles
   progress.value = 0;
   cancelRequested.value = false;
   pauseRequested.value = false;
+  uploadFlowStarted.value = false;
   uploadRuntimeState.value = "idle";
 
   if (uploadSession.value && !matchesSelectedFile(uploadSession.value)) {
@@ -237,13 +256,14 @@ function clearSelection() {
   uploadSession.value = null;
   cancelRequested.value = false;
   pauseRequested.value = false;
+  uploadFlowStarted.value = false;
   uploadRuntimeState.value = "idle";
 }
 
 async function initializeUpload() {
   if (!selectedFile.value) {
     message.value = "请先拖拽或选择一个视频文件";
-    return;
+    return null;
   }
 
   loading.init = true;
@@ -261,11 +281,36 @@ async function initializeUpload() {
     syncProgressFromSession(uploadSession.value);
     await fetchUploadHistory();
     message.value = `上传会话已创建：${uploadSession.value.uploadId}`;
+    return uploadSession.value;
   } catch (error) {
     message.value = error instanceof Error ? error.message : "上传初始化失败";
+    return null;
   } finally {
     loading.init = false;
   }
+}
+
+async function startUploadFlow() {
+  if (!selectedFile.value) {
+    message.value = "请先拖拽或选择一个视频文件";
+    return;
+  }
+
+  uploadFlowStarted.value = true;
+
+  if (
+    !uploadSession.value ||
+    uploadSession.value.status === "COMPLETED" ||
+    uploadSession.value.status === "CANCELED" ||
+    !matchesSelectedFile(uploadSession.value)
+  ) {
+    const initializedSession = await initializeUpload();
+    if (!initializedSession) {
+      return;
+    }
+  }
+
+  await uploadSelectedFile();
 }
 
 async function uploadSelectedFile() {
@@ -685,11 +730,13 @@ function applyHistorySession(item: UploadHistoryItem) {
   uploadRuntimeState.value = "idle";
   pauseRequested.value = false;
   cancelRequested.value = false;
+  uploadFlowStarted.value = false;
   syncProgressFromSession(item);
 }
 
 async function continueHistoryUpload(item: UploadHistoryItem) {
   applyHistorySession(item);
+  uploadFlowStarted.value = true;
 
   if (isSessionReadyToComplete(item)) {
     message.value = `检测到历史会话分片已齐，正在完成上传：${item.uploadId}`;
@@ -717,14 +764,34 @@ async function finalizeUploadSession(uploadId: string, redirectToVideo = false) 
     uploadSession.value = mergeUploadSessionState(uploadSession.value, await fetchLatestUploadSession(uploadId));
     syncProgressFromSession(uploadSession.value);
 
-    const completedVideo = await apiRequest<{ id: string }>(
-      "/upload/complete",
-      {
-        method: "POST",
-        body: JSON.stringify({ uploadId })
-      },
-      authStore.token.value
-    );
+    let completedVideo: { id: string };
+
+    try {
+      completedVideo = await apiRequest<{ id: string }>(
+        "/upload/complete",
+        {
+          method: "POST",
+          body: JSON.stringify({ uploadId })
+        },
+        authStore.token.value
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message === EXPIRED_UPLOAD_MESSAGE) {
+        uploadSession.value = mergeUploadSessionState(uploadSession.value, await fetchLatestUploadSession(uploadId));
+        syncProgressFromSession(uploadSession.value);
+
+        if (selectedFile.value && uploadSession.value && matchesSelectedFile(uploadSession.value)) {
+          message.value = "OSS 会话已过期，正在重新上传全部分片";
+          loading.complete = false;
+          await uploadSelectedFile();
+          return;
+        }
+
+        throw new Error("OSS 会话已过期，请重新选择原文件后继续上传");
+      }
+
+      throw error;
+    }
 
     if (uploadSession.value?.uploadId === uploadId) {
       uploadSession.value = {
@@ -832,36 +899,6 @@ function formatDuration(totalSeconds: number) {
       <span class="role-badge">{{ authStore.canUpload.value ? "可上传" : "当前角色不可上传" }}</span>
     </div>
 
-    <div class="top-actions">
-      <button class="primary-button" :disabled="!canInitialize" @click="initializeUpload">
-        {{ loading.init ? "步骤 1 创建中..." : "步骤 1 初始化上传" }}
-      </button>
-      <button class="ghost-button" :disabled="!canUploadParts" @click="uploadSelectedFile">
-        {{ loading.part ? "分片处理中..." : isPaused ? "继续上传" : "步骤 2 上传分片" }}
-      </button>
-      <button class="ghost-button" :disabled="!canPause" @click="pauseUpload">
-        暂停上传
-      </button>
-      <button class="danger-button" :disabled="!canCancel" @click="cancelUpload">
-        {{ loading.cancel ? "取消中..." : "取消上传" }}
-      </button>
-    </div>
-
-    <div class="progress-panel">
-      <div class="step-row">
-        <div v-for="step in workflowSteps" :key="step.id" class="step-card" :class="`step-${step.tone}`">
-          <span class="step-index">0{{ step.index }}</span>
-          <strong>{{ step.title }}</strong>
-          <small>{{ step.description }}</small>
-        </div>
-      </div>
-      <div>
-        <p class="section-label">上传进度</p>
-        <p class="progress-copy">{{ uploadSession ? `${uploadSession.uploadedParts?.length ?? 0} / ${partCount} 个分片` : "等待初始化上传" }}</p>
-      </div>
-      <el-progress :percentage="progress" :stroke-width="14" :show-text="true" />
-    </div>
-
     <div class="upload-grid">
       <div class="dropzone-card">
         <div v-if="selectedFile" class="poster-panel">
@@ -934,6 +971,17 @@ function formatDuration(totalSeconds: number) {
             <span>MIME 类型</span>
             <strong>{{ form.mimeType }}</strong>
           </div>
+          <div class="upload-actions">
+            <button class="primary-button" :disabled="!canStartUpload" type="button" @click="startUploadFlow">
+              {{ loading.init ? "准备上传中..." : loading.part ? "上传中..." : isPaused ? "继续上传" : "开始上传" }}
+            </button>
+            <button class="ghost-button" :disabled="!canPause" type="button" @click="pauseUpload">
+              暂停上传
+            </button>
+            <button class="danger-button" :disabled="!canCancel" type="button" @click="cancelUpload">
+              {{ loading.cancel ? "取消中..." : "取消上传" }}
+            </button>
+          </div>
         </div>
 
         <p v-else class="helper">还没有选择文件，拖拽视频后将在这里显示大小、时长和自定义名称。</p>
@@ -947,6 +995,21 @@ function formatDuration(totalSeconds: number) {
       <p><strong>状态:</strong> {{ uploadSession.status }}</p>
       <p><strong>总分片数:</strong> {{ partCount }}</p>
       <p><strong>已上传分片:</strong> {{ uploadSession.uploadedParts?.join(", ") || "无" }}</p>
+    </div>
+
+    <div v-if="showProgressPanel" class="progress-panel">
+      <div class="step-row">
+        <div v-for="step in workflowSteps" :key="step.id" class="step-card" :class="`step-${step.tone}`">
+          <span class="step-index">0{{ step.index }}</span>
+          <strong>{{ step.title }}</strong>
+          <small>{{ step.description }}</small>
+        </div>
+      </div>
+      <div>
+        <p class="section-label">上传进度</p>
+        <p class="progress-copy">{{ uploadSession ? `${uploadSession.uploadedParts?.length ?? 0} / ${partCount} 个分片` : "等待初始化上传" }}</p>
+      </div>
+      <el-progress :percentage="progress" :stroke-width="14" :show-text="true" />
     </div>
 
     <div class="history-card">
@@ -1034,13 +1097,6 @@ h2 {
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
   gap: 18px;
-}
-
-.top-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 16px;
 }
 
 .progress-panel {
@@ -1215,6 +1271,12 @@ h2 {
   gap: 14px;
 }
 
+.upload-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
 .field {
   display: grid;
   gap: 8px;
@@ -1339,6 +1401,10 @@ h2 {
   }
 
   .step-row {
+    grid-template-columns: 1fr;
+  }
+
+  .upload-actions {
     grid-template-columns: 1fr;
   }
 

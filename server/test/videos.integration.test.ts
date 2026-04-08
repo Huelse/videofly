@@ -25,6 +25,16 @@ describe("videos integration", () => {
         }
       }
     }));
+    vi.spyOn(oss, "getVideoSnapshotStream").mockImplementation(async (objectKey) => ({
+      stream: Readable.from([`preview:${objectKey}`]),
+      res: {
+        status: 200,
+        headers: {
+          "content-type": "image/jpeg",
+          etag: "preview-etag"
+        }
+      }
+    }));
     vi.spyOn(oss, "deleteObject").mockResolvedValue({} as never);
     await resetDatabase();
     await seedAdmin();
@@ -97,6 +107,28 @@ describe("videos integration", () => {
     expect(response.headers["content-type"]).toBe("video/mp4");
     expect(response.headers["accept-ranges"]).toBe("bytes");
     expect(oss.getObjectStream).toHaveBeenCalledWith("/upload/playback-demo.mp4", "bytes=0-23");
+  });
+
+  it("streams preview images through the api with cache headers", async () => {
+    const uploader = await createUser("video-preview@example.com", Role.UPLOADER);
+    const token = createAuthHeader(uploader).slice(7);
+    const video = await prisma.video.create({
+      data: {
+        title: "Preview demo",
+        ossKey: "/upload/preview-demo.mp4",
+        sizeBytes: BigInt(8192),
+        status: VideoStatus.READY,
+        uploaderId: uploader.id
+      }
+    });
+
+    const response = await request(app)
+      .get(`/api/v1/videos/${video.id}/preview?token=${encodeURIComponent(token)}`)
+      .expect(200);
+
+    expect(response.headers["content-type"]).toBe("image/jpeg");
+    expect(response.headers["cache-control"]).toContain("max-age=86400");
+    expect(oss.getVideoSnapshotStream).toHaveBeenCalledWith("/upload/preview-demo.mp4");
   });
 
   it("soft deletes videos instead of removing them immediately", async () => {

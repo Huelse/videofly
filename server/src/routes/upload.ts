@@ -9,6 +9,7 @@ import {
   abortMultipartUpload,
   buildOssObjectKey,
   completeMultipartUpload,
+  headObject,
   initMultipartUpload,
   uploadMultipartPart
 } from "../lib/oss.js";
@@ -45,6 +46,7 @@ const uploadPartSchema = z.object({
 const completeUploadSchema = z.object({
   uploadId: z.string().min(1)
 });
+const EXPIRED_UPLOAD_MESSAGE = "Upload session expired in OSS. Please continue upload to resend all parts.";
 
 const uploadParamsSchema = z.object({
   uploadId: z.string().min(1)
@@ -395,10 +397,52 @@ uploadRouter.post("/complete", async (req, res, next) => {
       throw new HttpError(400, "Upload is incomplete");
     }
 
-    await completeMultipartUpload(session.ossKey, session.ossUploadId, uploadedParts);
+    try {
+      await completeMultipartUpload(session.ossKey, session.ossUploadId, uploadedParts);
+    } catch (error) {
+      try {
+        await headObject(session.ossKey);
+      } catch {
+        if ((error as { code?: string } | undefined)?.code === "NoSuchUpload") {
+          const replacementOssUploadId = await initMultipartUpload(session.ossKey, session.mimeType);
+
+          await uploadSessionStore.update({
+            where: { uploadId: input.uploadId },
+            data: {
+              status: UPLOAD_SESSION_STATUS.INITIATED,
+              ossUploadId: replacementOssUploadId,
+              uploadedParts: []
+            }
+          });
+
+          throw new HttpError(409, EXPIRED_UPLOAD_MESSAGE);
+        }
+
+        throw error;
+      }
+    }
 
     const video = await prisma.$transaction(async (tx) => {
       const txUploadSessionStore = getUploadSessionStore(tx);
+      const existingDeletedVideo = await tx.video.findFirst({
+        where: {
+          ossKey: session.ossKey,
+          deletedAt: {
+            not: null
+          }
+        },
+        select: {
+          id: true
+        }
+      });
+
+      if (existingDeletedVideo) {
+        await tx.video.delete({
+          where: {
+            id: existingDeletedVideo.id
+          }
+        });
+      }
 
       await txUploadSessionStore.update({
         where: { uploadId: input.uploadId },

@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 
 import { createApp } from "../src/app.js";
 import * as oss from "../src/lib/oss.js";
+import { buildOssObjectKey } from "../src/lib/oss.js";
 import { prisma } from "../src/lib/prisma.js";
 import { createAuthHeader, createUser, resetDatabase, seedAdmin } from "./helpers.js";
 
@@ -118,6 +119,158 @@ describe("upload integration", () => {
     expect(detailResponse.body.id).toBe(video.id);
     expect(detailResponse.body.ossKey).toContain("/upload/");
     expect(detailResponse.body.sizeBytes).toBe("20971520");
+  });
+
+  it("completes upload successfully when a soft-deleted video exists for the same filename", async () => {
+    const uploader = await createUser("uploader-soft-deleted@example.com", Role.UPLOADER);
+    const filename = "reupload-demo.mp4";
+
+    await prisma.video.create({
+      data: {
+        title: "Old deleted demo",
+        ossKey: buildOssObjectKey(filename),
+        sizeBytes: BigInt(2048),
+        status: VideoStatus.DELETED,
+        deletedAt: new Date(),
+        uploaderId: uploader.id
+      }
+    });
+
+    const initResponse = await request(app)
+      .post("/api/v1/upload/init")
+      .set("Authorization", createAuthHeader(uploader))
+      .send({
+        title: "Replacement demo",
+        filename,
+        mimeType: "video/mp4",
+        fileSizeBytes: "8388608"
+      })
+      .expect(201);
+
+    const uploadId = initResponse.body.uploadId as string;
+    const partBuffer = Buffer.alloc(8 * 1024 * 1024, "z");
+    const checksum = crypto.createHash("sha256").update(partBuffer).digest("hex");
+
+    await request(app)
+      .put(`/api/v1/upload/part/upload?uploadId=${uploadId}&partNumber=1`)
+      .set("Authorization", createAuthHeader(uploader))
+      .set("x-part-sha256", checksum)
+      .set("Content-Type", "application/octet-stream")
+      .send(partBuffer)
+      .expect(200);
+
+    const completeResponse = await request(app)
+      .post("/api/v1/upload/complete")
+      .set("Authorization", createAuthHeader(uploader))
+      .send({ uploadId })
+      .expect(201);
+
+    expect(completeResponse.body.title).toBe("Replacement demo");
+
+    const videos = await prisma.video.findMany({
+      where: {
+        ossKey: buildOssObjectKey(filename)
+      }
+    });
+
+    expect(videos).toHaveLength(1);
+    expect(videos[0].status).toBe(VideoStatus.READY);
+    expect(videos[0].deletedAt).toBeNull();
+  });
+
+  it("recovers completion when oss multipart has already been finalized", async () => {
+    const uploader = await createUser("uploader-complete-recover@example.com", Role.UPLOADER);
+
+    vi.spyOn(oss, "completeMultipartUpload").mockRejectedValueOnce(new Error("NoSuchUpload"));
+    vi.spyOn(oss, "headObject").mockResolvedValueOnce({
+      status: 200,
+      res: { headers: {} }
+    } as never);
+
+    const initResponse = await request(app)
+      .post("/api/v1/upload/init")
+      .set("Authorization", createAuthHeader(uploader))
+      .send({
+        title: "Recover complete",
+        filename: "recover-complete.mp4",
+        mimeType: "video/mp4",
+        fileSizeBytes: "8388608"
+      })
+      .expect(201);
+
+    const uploadId = initResponse.body.uploadId as string;
+    const partBuffer = Buffer.alloc(8 * 1024 * 1024, "r");
+    const checksum = crypto.createHash("sha256").update(partBuffer).digest("hex");
+
+    await request(app)
+      .put(`/api/v1/upload/part/upload?uploadId=${uploadId}&partNumber=1`)
+      .set("Authorization", createAuthHeader(uploader))
+      .set("x-part-sha256", checksum)
+      .set("Content-Type", "application/octet-stream")
+      .send(partBuffer)
+      .expect(200);
+
+    const completeResponse = await request(app)
+      .post("/api/v1/upload/complete")
+      .set("Authorization", createAuthHeader(uploader))
+      .send({ uploadId })
+      .expect(201);
+
+    expect(completeResponse.body.title).toBe("Recover complete");
+    expect(oss.headObject).toHaveBeenCalledWith(buildOssObjectKey("recover-complete.mp4"));
+  });
+
+  it("resets the upload session when oss multipart has expired before completion", async () => {
+    const uploader = await createUser("uploader-expired-complete@example.com", Role.UPLOADER);
+
+    vi.spyOn(oss, "completeMultipartUpload").mockRejectedValueOnce(
+      Object.assign(new Error("NoSuchUpload"), {
+        code: "NoSuchUpload"
+      })
+    );
+    vi.spyOn(oss, "headObject").mockRejectedValueOnce(new Error("NotFound"));
+    vi.spyOn(oss, "initMultipartUpload")
+      .mockResolvedValueOnce("oss-upload-id")
+      .mockResolvedValueOnce("replacement-oss-upload-id");
+
+    const initResponse = await request(app)
+      .post("/api/v1/upload/init")
+      .set("Authorization", createAuthHeader(uploader))
+      .send({
+        title: "Expired complete",
+        filename: "expired-complete.mp4",
+        mimeType: "video/mp4",
+        fileSizeBytes: "8388608"
+      })
+      .expect(201);
+
+    const uploadId = initResponse.body.uploadId as string;
+    const partBuffer = Buffer.alloc(8 * 1024 * 1024, "x");
+    const checksum = crypto.createHash("sha256").update(partBuffer).digest("hex");
+
+    await request(app)
+      .put(`/api/v1/upload/part/upload?uploadId=${uploadId}&partNumber=1`)
+      .set("Authorization", createAuthHeader(uploader))
+      .set("x-part-sha256", checksum)
+      .set("Content-Type", "application/octet-stream")
+      .send(partBuffer)
+      .expect(200);
+
+    const completeResponse = await request(app)
+      .post("/api/v1/upload/complete")
+      .set("Authorization", createAuthHeader(uploader))
+      .send({ uploadId })
+      .expect(409);
+
+    expect(completeResponse.body.message).toBe("Upload session expired in OSS. Please continue upload to resend all parts.");
+
+    const refreshedSession = await (prisma as typeof prisma & { uploadSession: any }).uploadSession.findUniqueOrThrow({
+      where: { uploadId }
+    });
+
+    expect(refreshedSession.status).toBe("INITIATED");
+    expect(refreshedSession.ossUploadId).toBe("replacement-oss-upload-id");
+    expect(refreshedSession.uploadedParts).toEqual([]);
   });
 
   it("keeps all uploaded parts when the last batch is uploaded concurrently", async () => {

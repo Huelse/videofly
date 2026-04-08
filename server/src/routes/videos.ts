@@ -5,7 +5,7 @@ import { z } from "zod";
 
 import { HttpError } from "../lib/errors.js";
 import { verifyToken } from "../lib/auth.js";
-import { getObjectStream } from "../lib/oss.js";
+import { getObjectStream, getVideoSnapshotStream } from "../lib/oss.js";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 
@@ -198,6 +198,53 @@ videoRouter.get("/videos/:id/playback", async (req, res, next) => {
     }
 
     res.setHeader("Accept-Ranges", "bytes");
+    res.status(result.res.status);
+    result.stream.on("error", next);
+    result.stream.pipe(res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+videoRouter.get("/videos/:id/preview", async (req, res, next) => {
+  try {
+    const { id } = videoParamsSchema.parse(req.params);
+    const auth = authenticatePlaybackRequest(req);
+    const video = await prisma.video.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        ossKey: true,
+        uploaderId: true,
+        deletedAt: true
+      }
+    });
+
+    if (!video || video.deletedAt) {
+      throw new HttpError(404, "Resource not found");
+    }
+
+    if (auth.role !== Role.ADMIN && auth.sub !== video.uploaderId) {
+      throw new HttpError(403, "Insufficient permissions");
+    }
+
+    const result = await getVideoSnapshotStream(video.ossKey);
+    const headers = result.res.headers;
+
+    if (headers["content-type"]) {
+      res.setHeader("Content-Type", headers["content-type"]);
+    }
+    if (headers["content-length"]) {
+      res.setHeader("Content-Length", headers["content-length"]);
+    }
+    if (headers.etag) {
+      res.setHeader("ETag", headers.etag);
+    }
+    if (headers["last-modified"]) {
+      res.setHeader("Last-Modified", headers["last-modified"]);
+    }
+
+    res.setHeader("Cache-Control", "private, max-age=86400, stale-while-revalidate=604800");
     res.status(result.res.status);
     result.stream.on("error", next);
     result.stream.pipe(res);

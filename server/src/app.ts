@@ -40,6 +40,10 @@ export function createApp() {
       return res.status(404).json({ message: "Resource not found" });
     }
 
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      return res.status(409).json({ message: "Resource already exists" });
+    }
+
     return res.status(500).json({ message: "Internal server error" });
   });
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { RouterLink, useRoute } from "vue-router";
+import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import type { VideoDetail } from "../api";
 import { apiBaseUrl, apiRequest } from "../api";
@@ -8,10 +8,12 @@ import { authStore } from "../stores/auth";
 import { formatVideoStatus } from "../video-status";
 
 const route = useRoute();
+const router = useRouter();
 const video = ref<VideoDetail | null>(null);
 const loading = ref(false);
 const errorMessage = ref("");
 const playbackErrorMessage = ref("");
+const deleting = ref(false);
 
 const playbackUrl = computed(() => {
   if (!video.value || !authStore.token.value) {
@@ -36,6 +38,29 @@ async function fetchVideo() {
 
 function handlePlaybackError() {
   playbackErrorMessage.value = "视频播放失败，请刷新页面后重试";
+}
+
+async function deleteVideo() {
+  if (!video.value || deleting.value) {
+    return;
+  }
+
+  const confirmed = window.confirm(`确认删除《${video.value.title}》吗？视频会先从列表隐藏，OSS 文件会由后台定时清理。`);
+  if (!confirmed) {
+    return;
+  }
+
+  deleting.value = true;
+  errorMessage.value = "";
+
+  try {
+    await apiRequest<null>(`/videos/${video.value.id}`, { method: "DELETE" }, authStore.token.value);
+    await router.push("/dashboard/videos");
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : "视频删除失败";
+  } finally {
+    deleting.value = false;
+  }
 }
 
 function formatBytes(sizeBytes: string) {
@@ -111,6 +136,11 @@ onMounted(fetchVideo);
           <span>OSS Key</span>
           <strong class="mono">{{ video.ossKey }}</strong>
         </div>
+        <div class="info-actions">
+          <button class="danger-button" type="button" :disabled="deleting" @click="deleteVideo">
+            {{ deleting ? "删除中..." : "删除视频" }}
+          </button>
+        </div>
       </div>
     </div>
   </section>
@@ -151,6 +181,21 @@ h2 {
   background: #eaf2f8;
   color: #102a43;
   text-decoration: none;
+}
+
+.danger-button {
+  border: none;
+  border-radius: 14px;
+  padding: 12px 16px;
+  background: rgba(185, 28, 28, 0.12);
+  color: #b91c1c;
+  font: inherit;
+  cursor: pointer;
+}
+
+.danger-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .detail-layout {
@@ -204,6 +249,12 @@ h2 {
   grid-column: 1 / -1;
 }
 
+.info-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+}
+
 .mono {
   font-family: "IBM Plex Mono", monospace;
   word-break: break-all;
@@ -221,6 +272,14 @@ h2 {
   .page-head,
   .info-card {
     grid-template-columns: 1fr;
+  }
+
+  .info-actions {
+    justify-content: stretch;
+  }
+
+  .danger-button {
+    width: 100%;
   }
 }
 </style>

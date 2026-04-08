@@ -3,14 +3,13 @@ import { onMounted, ref } from "vue";
 import { RouterLink } from "vue-router";
 
 import type { VideoItem } from "../api";
-import { apiRequest } from "../api";
+import { apiBaseUrl, apiRequest } from "../api";
 import { authStore } from "../stores/auth";
-import { formatVideoStatus } from "../video-status";
 
 const videos = ref<VideoItem[]>([]);
 const loading = ref(false);
 const errorMessage = ref("");
-const deletingVideoId = ref<string | null>(null);
+const failedPreviewIds = ref(new Set<string>());
 
 async function fetchVideos() {
   loading.value = true;
@@ -19,6 +18,7 @@ async function fetchVideos() {
   try {
     const response = await apiRequest<{ items: VideoItem[] }>("/videos?scope=mine", {}, authStore.token.value);
     videos.value = response.items;
+    failedPreviewIds.value = new Set();
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : "视频获取失败";
   } finally {
@@ -26,27 +26,18 @@ async function fetchVideos() {
   }
 }
 
-async function deleteVideo(video: VideoItem) {
-  if (deletingVideoId.value) {
-    return;
+function previewUrl(videoId: string) {
+  if (!authStore.token.value) {
+    return "";
   }
 
-  const confirmed = window.confirm(`确认删除《${video.title}》吗？视频会先从列表隐藏，OSS 文件会由后台定时清理。`);
-  if (!confirmed) {
-    return;
-  }
+  return `${apiBaseUrl}/videos/${videoId}/preview?token=${encodeURIComponent(authStore.token.value)}`;
+}
 
-  deletingVideoId.value = video.id;
-  errorMessage.value = "";
-
-  try {
-    await apiRequest<null>(`/videos/${video.id}`, { method: "DELETE" }, authStore.token.value);
-    videos.value = videos.value.filter((item) => item.id !== video.id);
-  } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : "视频删除失败";
-  } finally {
-    deletingVideoId.value = null;
-  }
+function handlePreviewError(videoId: string) {
+  const next = new Set(failedPreviewIds.value);
+  next.add(videoId);
+  failedPreviewIds.value = next;
 }
 
 function formatBytes(sizeBytes: string) {
@@ -96,21 +87,21 @@ onMounted(fetchVideos);
       <article v-for="video in videos" :key="video.id" class="video-card">
         <RouterLink class="card-link" :to="`/dashboard/videos/${video.id}`">
           <div class="card-poster">
-            <span class="poster-chip">{{ formatVideoStatus(video.status) }}</span>
+            <img
+              v-if="!failedPreviewIds.has(video.id)"
+              class="poster-image"
+              :src="previewUrl(video.id)"
+              :alt="video.title"
+              loading="lazy"
+              @error="handlePreviewError(video.id)"
+            />
             <strong>{{ video.title }}</strong>
-            <small>点击查看详情并播放</small>
           </div>
         </RouterLink>
 
         <div class="card-body">
           <p class="meta-line">{{ formatBytes(video.sizeBytes) }}</p>
           <p class="meta-line">{{ new Date(video.createdAt).toLocaleString() }}</p>
-          <div class="card-actions">
-            <RouterLink class="detail-link" :to="`/dashboard/videos/${video.id}`">查看详情</RouterLink>
-            <button class="danger-button" type="button" :disabled="deletingVideoId === video.id" @click="deleteVideo(video)">
-              {{ deletingVideoId === video.id ? "删除中..." : "删除" }}
-            </button>
-          </div>
         </div>
       </article>
     </div>
@@ -146,26 +137,16 @@ h2 {
   color: #102a43;
 }
 
-.ghost-button,
-.danger-button,
-.detail-link {
+.ghost-button {
   border: none;
   border-radius: 14px;
   padding: 10px 14px;
   font: inherit;
 }
 
-.ghost-button,
-.detail-link {
+.ghost-button {
   background: #eaf2f8;
   color: #102a43;
-  text-decoration: none;
-  cursor: pointer;
-}
-
-.danger-button {
-  background: #fee2e2;
-  color: #991b1b;
   cursor: pointer;
 }
 
@@ -188,6 +169,8 @@ h2 {
 }
 
 .card-poster {
+  position: relative;
+  overflow: hidden;
   min-height: 140px;
   display: grid;
   align-content: end;
@@ -199,17 +182,20 @@ h2 {
   color: #f8fafc;
 }
 
-.poster-chip {
-  justify-self: start;
-  padding: 4px 9px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.14);
-  font-size: 0.75rem;
+.poster-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .card-poster strong {
+  position: relative;
+  z-index: 1;
   font-size: 1rem;
   line-height: 1.35;
+  text-shadow: 0 2px 12px rgba(15, 23, 42, 0.62);
 }
 
 .card-poster small {
@@ -218,7 +204,7 @@ h2 {
 
 .card-body {
   display: grid;
-  gap: 8px;
+  gap: 6px;
   padding: 14px 16px 16px;
 }
 
@@ -226,13 +212,6 @@ h2 {
   margin: 0;
   color: #52606d;
   font-size: 0.92rem;
-}
-
-.card-actions {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  margin-top: 8px;
 }
 
 .empty-card {
@@ -249,16 +228,9 @@ h2 {
 }
 
 @media (max-width: 720px) {
-  .page-head,
-  .card-actions {
+  .page-head {
     flex-direction: column;
     align-items: flex-start;
-  }
-
-  .detail-link,
-  .danger-button {
-    width: 100%;
-    text-align: center;
   }
 }
 </style>
