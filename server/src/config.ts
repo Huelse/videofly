@@ -3,6 +3,18 @@ import { z } from "zod";
 
 dotenv.config({ path: new URL("../../.env", import.meta.url) });
 
+function normalizeUrl(value: unknown) {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  if (/^https?:\/\//i.test(value)) {
+    return value;
+  }
+
+  return `https://${value}`;
+}
+
 const schema = z.object({
   DATABASE_URL: z.string().min(1),
   JWT_SECRET: z.string().min(8),
@@ -12,7 +24,7 @@ const schema = z.object({
   PASSWORD_RESET_MAX_REQUESTS_PER_HOUR: z.coerce.number().int().positive().default(5),
   OSS_REGION: z.string().min(1).default("oss-cn-shanghai"),
   OSS_BUCKET: z.string().min(1).default("videofly-dev"),
-  OSS_ENDPOINT: z.string().url().default("https://oss-cn-shanghai.aliyuncs.com"),
+  OSS_ENDPOINT: z.preprocess(normalizeUrl, z.string().url()).default("https://oss-cn-shanghai.aliyuncs.com"),
   OSS_ACCESS_KEY_ID: z.string().min(1).default("replace-me"),
   OSS_ACCESS_KEY_SECRET: z.string().min(1).default("replace-me")
 });

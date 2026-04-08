@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:17-alpine
+    image: ${DOCKER_REGISTRY_MIRROR:-docker.m.daocloud.io}/library/postgres:17-alpine
     container_name: videofly-postgres
     restart: unless-stopped
     environment:
@@ -19,6 +19,11 @@ services:
     build:
       context: .
       dockerfile: server/Dockerfile
+      args:
+        DOCKER_REGISTRY_MIRROR: ${DOCKER_REGISTRY_MIRROR:-docker.m.daocloud.io}
+        PNPM_REGISTRY: ${PNPM_REGISTRY:-https://registry.npmmirror.com}
+        APT_MIRROR_BASE: ${APT_MIRROR_BASE:-http://mirrors.aliyun.com/debian}
+        APT_SECURITY_MIRROR: ${APT_SECURITY_MIRROR:-http://mirrors.aliyun.com/debian-security}
     container_name: videofly-server
     restart: unless-stopped
     depends_on:
@@ -47,6 +52,8 @@ services:
       context: .
       dockerfile: client/Dockerfile
       args:
+        DOCKER_REGISTRY_MIRROR: ${DOCKER_REGISTRY_MIRROR:-docker.m.daocloud.io}
+        PNPM_REGISTRY: ${PNPM_REGISTRY:-https://registry.npmmirror.com}
         VITE_API_BASE_URL: /api/v1
     container_name: videofly-client
     restart: unless-stopped
@@ -60,7 +67,7 @@ services:
       retries: 10
 
   nginx:
-    image: nginx:1.27-alpine
+    image: ${DOCKER_REGISTRY_MIRROR:-docker.m.daocloud.io}/library/nginx:1.27-alpine
     container_name: videofly-nginx
     restart: unless-stopped
     depends_on:
@@ -82,7 +89,7 @@ services:
       retries: 10
 
   certbot:
-    image: certbot/certbot:latest
+    image: ${DOCKER_REGISTRY_MIRROR:-docker.m.daocloud.io}/certbot/certbot:latest
     container_name: videofly-certbot
     volumes:
       - letsencrypt-data:/etc/letsencrypt

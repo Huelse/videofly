@@ -49,5 +49,8 @@ EOF
 echo "Running Prisma migrations..."
 pnpm --filter @videofly/server exec prisma migrate deploy
 
+echo "Seeding default data..."
+pnpm --filter @videofly/server prisma:seed
+
 echo "Starting API server..."
 exec pnpm --filter @videofly/server start

@@ -6,6 +6,10 @@ REMOTE_HOST="${REMOTE_HOST:-root@42.121.218.102}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/platform-eng-2.pem}"
 REMOTE_DIR="${REMOTE_DIR:-/opt/videofly}"
 DOMAIN="${DOMAIN:-videofly.oini.top}"
+DOCKER_REGISTRY_MIRROR="${DOCKER_REGISTRY_MIRROR:-docker.m.daocloud.io}"
+PNPM_REGISTRY="${PNPM_REGISTRY:-https://registry.npmmirror.com}"
+APT_MIRROR_BASE="${APT_MIRROR_BASE:-http://mirrors.aliyun.com/debian}"
+APT_SECURITY_MIRROR="${APT_SECURITY_MIRROR:-http://mirrors.aliyun.com/debian-security}"
 SSH_OPTS=("-i" "$SSH_KEY" "-o" "StrictHostKeyChecking=accept-new")
 RSYNC_RSH="ssh ${SSH_OPTS[*]}"
 
@@ -42,11 +46,19 @@ rsync -az --delete \
 
 echo "Starting stack with temporary HTTP config"
 ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" "cd '$REMOTE_DIR' \
+  && export DOCKER_REGISTRY_MIRROR='$DOCKER_REGISTRY_MIRROR' \
+  && export PNPM_REGISTRY='$PNPM_REGISTRY' \
+  && export APT_MIRROR_BASE='$APT_MIRROR_BASE' \
+  && export APT_SECURITY_MIRROR='$APT_SECURITY_MIRROR' \
   && cp deploy/nginx/http.conf deploy/nginx/active.conf \
   && docker compose up -d --build postgres server client nginx"
 
 echo "Requesting or renewing Let's Encrypt certificate for $DOMAIN"
 ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" "cd '$REMOTE_DIR' \
+  && export DOCKER_REGISTRY_MIRROR='$DOCKER_REGISTRY_MIRROR' \
+  && export PNPM_REGISTRY='$PNPM_REGISTRY' \
+  && export APT_MIRROR_BASE='$APT_MIRROR_BASE' \
+  && export APT_SECURITY_MIRROR='$APT_SECURITY_MIRROR' \
   && docker compose run --rm certbot certonly --webroot -w /var/www/certbot \
     -d '$DOMAIN' \
     --email '$LETSENCRYPT_EMAIL' \
@@ -56,6 +68,10 @@ ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" "cd '$REMOTE_DIR' \
 
 echo "Switching Nginx to HTTPS config"
 ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" "cd '$REMOTE_DIR' \
+  && export DOCKER_REGISTRY_MIRROR='$DOCKER_REGISTRY_MIRROR' \
+  && export PNPM_REGISTRY='$PNPM_REGISTRY' \
+  && export APT_MIRROR_BASE='$APT_MIRROR_BASE' \
+  && export APT_SECURITY_MIRROR='$APT_SECURITY_MIRROR' \
   && cp deploy/nginx/https.conf deploy/nginx/active.conf \
   && docker compose up -d nginx \
   && docker compose exec -T nginx nginx -s reload"
