@@ -9,6 +9,7 @@ const router = useRouter();
 
 const navItems = computed(() => {
   const items = [
+    { to: "/dashboard/me", label: "我的信息" },
     { to: "/dashboard/videos", label: "我的视频" },
     { to: "/dashboard/upload", label: "上传中心" }
   ];

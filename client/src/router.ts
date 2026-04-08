@@ -14,6 +14,11 @@ const dashboardChildren: RouteRecordRaw[] = [
     redirect: { name: "dashboard-videos" }
   },
   {
+    path: "me",
+    name: "dashboard-me",
+    component: () => import("./pages/dashboard/DashboardProfilePage.vue")
+  },
+  {
     path: "videos",
     name: "dashboard-videos",
     component: () => import("./pages/dashboard/DashboardVideosPage.vue")

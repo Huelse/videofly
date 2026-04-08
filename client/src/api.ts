@@ -29,6 +29,11 @@ export type UserListResponse = {
   };
 };
 
+export type UserStorageUsage = {
+  totalSizeBytes: string;
+  videoCount: number;
+};
+
 export type UploadSessionState = {
   uploadId: string;
   status: string;

@@ -3,7 +3,7 @@ import request from "supertest";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
-import { createPasswordResetToken, hashResetToken } from "../src/lib/auth.js";
+import { createPasswordResetToken, hashResetToken, verifyPassword } from "../src/lib/auth.js";
 import { prisma } from "../src/lib/prisma.js";
 import { createAuthHeader, createUser, resetDatabase, seedAdmin } from "./helpers.js";
 
@@ -63,6 +63,45 @@ describe("auth and user management integration", () => {
 
     expect(response.body.email).toBe("viewer-me@example.com");
     expect(response.body.role).toBe(Role.VIEWER);
+  });
+
+  it("returns the current user's storage usage", async () => {
+    const uploader = await createUser("viewer-storage@example.com", Role.UPLOADER);
+
+    await prisma.video.createMany({
+      data: [
+        {
+          title: "First",
+          ossKey: "/upload/first.mp4",
+          sizeBytes: BigInt(1024),
+          status: "READY",
+          uploaderId: uploader.id
+        },
+        {
+          title: "Second",
+          ossKey: "/upload/second.mp4",
+          sizeBytes: BigInt(2048),
+          status: "READY",
+          uploaderId: uploader.id
+        },
+        {
+          title: "Deleted",
+          ossKey: "/upload/deleted.mp4",
+          sizeBytes: BigInt(4096),
+          status: "DELETED",
+          deletedAt: new Date(),
+          uploaderId: uploader.id
+        }
+      ]
+    });
+
+    const response = await request(app)
+      .get("/api/v1/users/me/storage")
+      .set("Authorization", createAuthHeader(uploader))
+      .expect(200);
+
+    expect(response.body.totalSizeBytes).toBe("3072");
+    expect(response.body.videoCount).toBe(2);
   });
 
   it("restricts user listing to admins", async () => {
@@ -154,6 +193,30 @@ describe("auth and user management integration", () => {
     await request(app)
       .post("/api/v1/auth/login")
       .send({ email: "viewer-change@example.com", password: "NewPassword123" })
+      .expect(200);
+  });
+
+  it("allows an authenticated user to change their password", async () => {
+    const user = await createUser("viewer-password-self@example.com");
+
+    await request(app)
+      .put("/api/v1/users/me/password")
+      .set("Authorization", createAuthHeader(user))
+      .send({
+        currentPassword: "Viewer1234",
+        newPassword: "Viewer5678"
+      })
+      .expect(200);
+
+    const updated = await prisma.user.findUniqueOrThrow({
+      where: { id: user.id }
+    });
+
+    expect(await verifyPassword("Viewer5678", updated.passwordHash)).toBe(true);
+
+    await request(app)
+      .post("/api/v1/auth/login")
+      .send({ email: "viewer-password-self@example.com", password: "Viewer5678" })
       .expect(200);
   });
 });
