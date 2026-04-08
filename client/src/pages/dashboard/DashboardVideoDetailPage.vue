@@ -2,10 +2,10 @@
 import { computed, onMounted, ref } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
-import type { VideoDetail } from "../api";
-import { apiBaseUrl, apiRequest } from "../api";
-import { authStore } from "../stores/auth";
-import { formatVideoStatus } from "../video-status";
+import type { VideoDetail } from "../../api";
+import { apiBaseUrl, apiRequest } from "../../api";
+import { authStore } from "../../stores/auth";
+import { formatVideoStatus } from "../../video-status";
 
 const route = useRoute();
 const router = useRouter();

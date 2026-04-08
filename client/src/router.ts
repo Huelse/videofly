@@ -1,73 +1,76 @@
-import { createRouter, createWebHistory } from "vue-router";
+import { createRouter, createWebHistory, type RouteRecordRaw } from "vue-router";
 
 import { authStore } from "./stores/auth";
-import DashboardLayout from "./pages/DashboardLayout.vue";
-import DashboardOssFilesPage from "./pages/DashboardOssFilesPage.vue";
-import DashboardVideoDetailPage from "./pages/DashboardVideoDetailPage.vue";
-import DashboardUsersPage from "./pages/DashboardUsersPage.vue";
-import DashboardVideosPage from "./pages/DashboardVideosPage.vue";
-import DashboardUploadPage from "./pages/DashboardUploadPage.vue";
-import HomePage from "./pages/HomePage.vue";
-import LoginPage from "./pages/LoginPage.vue";
-import RegisterPage from "./pages/RegisterPage.vue";
+
+type AppRouteMeta = {
+  public?: boolean;
+  publicOnly?: boolean;
+  requiresAdmin?: boolean;
+};
+
+const dashboardChildren: RouteRecordRaw[] = [
+  {
+    path: "",
+    redirect: { name: "dashboard-videos" }
+  },
+  {
+    path: "videos",
+    name: "dashboard-videos",
+    component: () => import("./pages/dashboard/DashboardVideosPage.vue")
+  },
+  {
+    path: "videos/:id",
+    name: "dashboard-video-detail",
+    component: () => import("./pages/dashboard/DashboardVideoDetailPage.vue")
+  },
+  {
+    path: "upload",
+    name: "dashboard-upload",
+    component: () => import("./pages/dashboard/DashboardUploadPage.vue")
+  },
+  {
+    path: "oss",
+    name: "dashboard-oss",
+    component: () => import("./pages/dashboard/DashboardOssFilesPage.vue"),
+    meta: { requiresAdmin: true } satisfies AppRouteMeta
+  },
+  {
+    path: "users",
+    name: "dashboard-users",
+    component: () => import("./pages/dashboard/DashboardUsersPage.vue"),
+    meta: { requiresAdmin: true } satisfies AppRouteMeta
+  }
+];
+
+const routes: RouteRecordRaw[] = [
+  {
+    path: "/",
+    name: "home",
+    component: () => import("./pages/HomePage.vue"),
+    meta: { public: true, publicOnly: true } satisfies AppRouteMeta
+  },
+  {
+    path: "/login",
+    name: "login",
+    component: () => import("./pages/LoginPage.vue"),
+    meta: { public: true, publicOnly: true } satisfies AppRouteMeta
+  },
+  {
+    path: "/register",
+    name: "register",
+    component: () => import("./pages/RegisterPage.vue"),
+    meta: { public: true, publicOnly: true } satisfies AppRouteMeta
+  },
+  {
+    path: "/dashboard",
+    component: () => import("./pages/dashboard/DashboardLayout.vue"),
+    children: dashboardChildren
+  }
+];
 
 const router = createRouter({
   history: createWebHistory(),
-  routes: [
-    {
-      path: "/",
-      name: "home",
-      component: HomePage,
-      meta: { public: true }
-    },
-    {
-      path: "/login",
-      name: "login",
-      component: LoginPage,
-      meta: { public: true }
-    },
-    {
-      path: "/register",
-      name: "register",
-      component: RegisterPage,
-      meta: { public: true }
-    },
-    {
-      path: "/dashboard",
-      component: DashboardLayout,
-      children: [
-        {
-          path: "",
-          redirect: "/dashboard/videos"
-        },
-        {
-          path: "videos",
-          name: "dashboard-videos",
-          component: DashboardVideosPage
-        },
-        {
-          path: "videos/:id",
-          name: "dashboard-video-detail",
-          component: DashboardVideoDetailPage
-        },
-        {
-          path: "upload",
-          name: "dashboard-upload",
-          component: DashboardUploadPage
-        },
-        {
-          path: "oss",
-          name: "dashboard-oss",
-          component: DashboardOssFilesPage
-        },
-        {
-          path: "users",
-          name: "dashboard-users",
-          component: DashboardUsersPage
-        }
-      ]
-    }
-  ]
+  routes
 });
 
 router.beforeEach(async (to) => {
@@ -75,17 +78,18 @@ router.beforeEach(async (to) => {
     await authStore.bootstrap();
   }
 
-  const isPublicRoute = Boolean(to.meta.public);
+  const meta = to.meta as AppRouteMeta;
+  const isAuthenticated = authStore.isAuthenticated.value;
 
-  if (!isPublicRoute && !authStore.isAuthenticated.value) {
+  if (!meta.public && !isAuthenticated) {
     return { name: "login" };
   }
 
-  if (isPublicRoute && authStore.isAuthenticated.value) {
+  if (meta.publicOnly && isAuthenticated) {
     return { name: "dashboard-videos" };
   }
 
-  if ((to.name === "dashboard-users" || to.name === "dashboard-oss") && authStore.currentUser.value?.role !== "ADMIN") {
+  if (meta.requiresAdmin && authStore.currentUser.value?.role !== "ADMIN") {
     return { name: "dashboard-videos" };
   }
 

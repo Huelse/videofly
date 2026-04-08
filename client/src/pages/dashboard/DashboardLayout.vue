@@ -2,7 +2,7 @@
 import { computed } from "vue";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 
-import { authStore } from "../stores/auth";
+import { authStore } from "../../stores/auth";
 
 const route = useRoute();
 const router = useRouter();

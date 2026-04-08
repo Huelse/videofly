@@ -1,13 +1,21 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 
-import type { AuthUser, Role, UserListResponse } from "../api";
-import { apiRequest } from "../api";
-import { authStore } from "../stores/auth";
+import type { AuthUser, Role, UserListResponse } from "../../api";
+import { apiRequest } from "../../api";
+import UserRoleActions from "../../components/user/UserRoleActions.vue";
+import { authStore } from "../../stores/auth";
 
 const users = ref<AuthUser[]>([]);
 const loading = ref(false);
 const errorMessage = ref("");
+const pendingUserId = ref("");
+
+const roleLabels: Record<Role, string> = {
+  VIEWER: "访客",
+  UPLOADER: "上传者",
+  ADMIN: "管理员"
+};
 
 async function fetchUsers() {
   loading.value = true;
@@ -24,6 +32,13 @@ async function fetchUsers() {
 }
 
 async function updateRole(userId: string, role: Role) {
+  if (pendingUserId.value) {
+    return;
+  }
+
+  pendingUserId.value = userId;
+  errorMessage.value = "";
+
   try {
     await apiRequest(`/users/${userId}/role`, {
       method: "PUT",
@@ -32,7 +47,17 @@ async function updateRole(userId: string, role: Role) {
     await fetchUsers();
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : "角色更新失败";
+  } finally {
+    pendingUserId.value = "";
   }
+}
+
+function formatRole(role: Role) {
+  return roleLabels[role];
+}
+
+function roleBadgeClass(role: Role) {
+  return `role-${role.toLowerCase()}`;
 }
 
 onMounted(fetchUsers);
@@ -65,14 +90,18 @@ onMounted(fetchUsers);
         <tbody>
           <tr v-for="user in users" :key="user.id">
             <td>{{ user.email }}</td>
-            <td>{{ user.role }}</td>
-            <td>{{ user._count?.videos ?? 0 }}</td>
             <td>
-              <select :value="user.role" @change="updateRole(user.id, ($event.target as HTMLSelectElement).value as Role)">
-                <option value="VIEWER">VIEWER</option>
-                <option value="UPLOADER">UPLOADER</option>
-                <option value="ADMIN">ADMIN</option>
-              </select>
+              <span class="role-badge" :class="roleBadgeClass(user.role)">
+                {{ formatRole(user.role) }}
+              </span>
+            </td>
+            <td>{{ user._count?.videos ?? 0 }}</td>
+            <td class="actions-cell">
+              <UserRoleActions
+                :role="user.role"
+                :pending="pendingUserId === user.id"
+                @select="updateRole(user.id, $event)"
+              />
             </td>
           </tr>
         </tbody>
@@ -134,16 +163,44 @@ td {
   padding: 12px 10px;
   border-bottom: 1px solid #e2e8f0;
   text-align: left;
+  vertical-align: middle;
 }
 
-td select {
-  padding: 10px 12px;
-  border: 1px solid #d9e2ec;
-  border-radius: 12px;
-  font: inherit;
+.role-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.role-viewer {
+  background: #eef2ff;
+  color: #3730a3;
+}
+
+.role-uploader {
+  background: #ecfeff;
+  color: #155e75;
+}
+
+.role-admin {
+  background: #fff1f2;
+  color: #be123c;
+}
+
+.actions-cell {
+  min-width: 280px;
 }
 
 .error-text {
   color: #b91c1c;
+}
+
+@media (max-width: 880px) {
+  .actions-cell {
+    min-width: 220px;
+  }
 }
 </style>

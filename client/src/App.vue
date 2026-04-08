@@ -1,7 +1,7 @@
-<template>
-  <RouterView />
-</template>
-
 <script setup lang="ts">
-import { RouterView } from "vue-router";
+import AppRouteView from "./components/app/AppRouteView.vue";
 </script>
+
+<template>
+  <AppRouteView />
+</template>

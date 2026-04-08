@@ -3,9 +3,9 @@ import type { UploadFile, UploadFiles, UploadRawFile } from "element-plus";
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 
-import type { UploadHistoryItem, UploadSessionState } from "../api";
-import { apiBaseUrl, apiRequest } from "../api";
-import { authStore } from "../stores/auth";
+import type { UploadHistoryItem, UploadSessionState } from "../../api";
+import { apiBaseUrl, apiRequest } from "../../api";
+import { authStore } from "../../stores/auth";
 
 const router = useRouter();
 const PARALLEL_UPLOAD_WORKERS = 4;
@@ -466,7 +466,7 @@ async function fetchLatestUploadSession(uploadId: string) {
 
 async function uploadChunkInWorker(uploadId: string, chunk: Blob, partNumber: number, contentType: string) {
   return await new Promise<UploadSessionState>((resolve, reject) => {
-    const worker = new Worker(new URL("../workers/upload-part.worker.ts", import.meta.url), {
+    const worker = new Worker(new URL("../../workers/upload-part.worker.ts", import.meta.url), {
       type: "module"
     });
 

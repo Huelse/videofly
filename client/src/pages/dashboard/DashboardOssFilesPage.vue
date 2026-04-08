@@ -2,10 +2,10 @@
 import { computed, onMounted, ref } from "vue";
 import { RouterLink } from "vue-router";
 
-import type { VideoItem } from "../api";
-import { apiRequest } from "../api";
-import { authStore } from "../stores/auth";
-import { formatVideoStatus } from "../video-status";
+import type { VideoItem } from "../../api";
+import { apiRequest } from "../../api";
+import { authStore } from "../../stores/auth";
+import { formatVideoStatus } from "../../video-status";
 
 const videos = ref<VideoItem[]>([]);
 const loading = ref(false);

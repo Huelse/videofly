@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
-import { RouterLink } from "vue-router";
 
-import type { VideoItem } from "../api";
-import { apiBaseUrl, apiRequest } from "../api";
-import { authStore } from "../stores/auth";
+import type { VideoItem } from "../../api";
+import { apiBaseUrl, apiRequest } from "../../api";
+import VideoListCard from "../../components/video/VideoListCard.vue";
+import { authStore } from "../../stores/auth";
 
 const videos = ref<VideoItem[]>([]);
 const loading = ref(false);
@@ -84,26 +84,17 @@ onMounted(fetchVideos);
     </div>
 
     <div v-else class="video-grid">
-      <article v-for="video in videos" :key="video.id" class="video-card">
-        <RouterLink class="card-link" :to="`/dashboard/videos/${video.id}`">
-          <div class="card-poster">
-            <img
-              v-if="!failedPreviewIds.has(video.id)"
-              class="poster-image"
-              :src="previewUrl(video.id)"
-              :alt="video.title"
-              loading="lazy"
-              @error="handlePreviewError(video.id)"
-            />
-            <strong>{{ video.title }}</strong>
-          </div>
-        </RouterLink>
-
-        <div class="card-body">
-          <p class="meta-line">{{ formatBytes(video.sizeBytes) }}</p>
-          <p class="meta-line">{{ new Date(video.createdAt).toLocaleString() }}</p>
-        </div>
-      </article>
+      <VideoListCard
+        v-for="video in videos"
+        :key="video.id"
+        :title="video.title"
+        :detail-to="`/dashboard/videos/${video.id}`"
+        :preview-url="previewUrl(video.id)"
+        :preview-enabled="!failedPreviewIds.has(video.id)"
+        :size-label="formatBytes(video.sizeBytes)"
+        :created-at-label="new Date(video.createdAt).toLocaleString()"
+        @preview-error="handlePreviewError(video.id)"
+      />
     </div>
   </section>
 </template>
@@ -142,9 +133,6 @@ h2 {
   border-radius: 14px;
   padding: 10px 14px;
   font: inherit;
-}
-
-.ghost-button {
   background: #eaf2f8;
   color: #102a43;
   cursor: pointer;
@@ -154,64 +142,6 @@ h2 {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 14px;
-}
-
-.video-card {
-  overflow: hidden;
-  border-radius: 20px;
-  background: #f8fbff;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-}
-
-.card-link {
-  color: inherit;
-  text-decoration: none;
-}
-
-.card-poster {
-  position: relative;
-  overflow: hidden;
-  min-height: 140px;
-  display: grid;
-  align-content: end;
-  gap: 8px;
-  padding: 16px;
-  background:
-    radial-gradient(circle at top right, rgba(255, 200, 87, 0.48), transparent 30%),
-    linear-gradient(135deg, #0f172a, #1e3a5f 60%, #244d7c);
-  color: #f8fafc;
-}
-
-.poster-image {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.card-poster strong {
-  position: relative;
-  z-index: 1;
-  font-size: 1rem;
-  line-height: 1.35;
-  text-shadow: 0 2px 12px rgba(15, 23, 42, 0.62);
-}
-
-.card-poster small {
-  color: rgba(248, 250, 252, 0.76);
-}
-
-.card-body {
-  display: grid;
-  gap: 6px;
-  padding: 14px 16px 16px;
-}
-
-.meta-line {
-  margin: 0;
-  color: #52606d;
-  font-size: 0.92rem;
 }
 
 .empty-card {
