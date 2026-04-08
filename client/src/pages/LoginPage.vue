@@ -6,8 +6,8 @@ import { authStore } from "../stores/auth";
 
 const router = useRouter();
 const form = reactive({
-  email: "admin@videofly.local",
-  password: "Admin123!"
+  email: "",
+  password: ""
 });
 const errorMessage = ref("");
 const loading = ref(false);
@@ -18,7 +18,7 @@ async function submit() {
 
   try {
     await authStore.login(form.email, form.password);
-    await router.push({ name: "dashboard-videos" });
+    await router.push({ name: "dashboard-me" });
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : "登录失败";
   } finally {
@@ -33,7 +33,6 @@ async function submit() {
       <div>
         <p class="eyebrow">Login</p>
         <h1>登录后台</h1>
-        <p class="caption">成功后将进入管理后台的视频列表页。</p>
       </div>
 
       <form class="auth-form" @submit.prevent="submit">

@@ -24,7 +24,7 @@ async function submit() {
 
   try {
     await authStore.register(form.email, form.password);
-    await router.push({ name: "dashboard-videos" });
+    await router.push({ name: "dashboard-me" });
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : "注册失败";
   } finally {
@@ -39,7 +39,7 @@ async function submit() {
       <div>
         <p class="eyebrow">Register</p>
         <h1>创建账号</h1>
-        <p class="caption">注册成功后会自动登录并进入后台。</p>
+        <p class="caption">注册成功后会自动登录并进入我的信息页。</p>
       </div>
 
       <form class="auth-form" @submit.prevent="submit">

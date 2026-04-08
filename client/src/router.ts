@@ -11,7 +11,7 @@ type AppRouteMeta = {
 const dashboardChildren: RouteRecordRaw[] = [
   {
     path: "",
-    redirect: { name: "dashboard-videos" }
+    redirect: { name: "dashboard-me" }
   },
   {
     path: "me",
@@ -91,11 +91,11 @@ router.beforeEach(async (to) => {
   }
 
   if (meta.publicOnly && isAuthenticated) {
-    return { name: "dashboard-videos" };
+    return { name: "dashboard-me" };
   }
 
   if (meta.requiresAdmin && authStore.currentUser.value?.role !== "ADMIN") {
-    return { name: "dashboard-videos" };
+    return { name: "dashboard-me" };
   }
 
   return true;
