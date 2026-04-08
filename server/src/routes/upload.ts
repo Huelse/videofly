@@ -14,6 +14,7 @@ import {
   uploadMultipartPart
 } from "../lib/oss.js";
 import { prisma } from "../lib/prisma.js";
+import { getRemainingQuotaBytes, getUserStorageUsage } from "../lib/users.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 
 const ALLOWED_TYPES = new Set([
@@ -146,6 +147,8 @@ function serializeUploadSession(session: SerializedUploadSessionInput) {
 }
 
 uploadRouter.post("/init", async (req, res, next) => {
+  let pendingMultipartUpload: { ossKey: string; ossUploadId: string } | null = null;
+
   try {
     const input = initUploadSchema.parse(req.body);
 
@@ -156,62 +159,97 @@ uploadRouter.post("/init", async (req, res, next) => {
     const uploadId = crypto.randomUUID();
     const filename = input.filename;
     const ossKey = buildOssObjectKey(input.filename);
-    const existingVideo = await prisma.video.findFirst({
-      where: {
-        ossKey,
-        deletedAt: null
-      },
-      select: { id: true }
-    });
-
-    if (existingVideo) {
-      throw new HttpError(409, "Filename already exists. Please rename the file and try again");
-    }
-
-    const activeSession = await uploadSessionStore.findFirst({
-      where: {
-        ossKey,
-        status: {
-          in: [UPLOAD_SESSION_STATUS.INITIATED, UPLOAD_SESSION_STATUS.UPLOADING]
-        }
-      },
-      select: {
-        uploadId: true,
-        uploaderId: true,
-        partSizeBytes: true,
-        status: true,
-        uploadedParts: true
-      }
-    });
-
-    if (activeSession) {
-      throw new HttpError(409, "Filename already exists. Please rename the file and try again");
-    }
-
     const ossUploadId = await initMultipartUpload(ossKey, input.mimeType);
-    const session = await uploadSessionStore.create({
-      data: {
-        title: input.title,
-        filename,
-        mimeType: input.mimeType,
-        fileSizeBytes: input.fileSizeBytes,
-        uploadId,
-        ossKey,
-        ossUploadId,
-        partSizeBytes: DEFAULT_PART_SIZE_BYTES,
-        uploaderId: req.auth!.userId
-      },
-      select: {
-        uploadId: true,
-        partSizeBytes: true,
-        status: true,
-        uploadedParts: true,
-        fileSizeBytes: true
+    pendingMultipartUpload = { ossKey, ossUploadId };
+
+    const session = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`
+        SELECT 1
+        FROM "User"
+        WHERE "id" = ${req.auth!.userId}
+        FOR UPDATE
+      `;
+
+      const txUploadSessionStore = getUploadSessionStore(tx);
+      const [user, usage, existingVideo, activeSession] = await Promise.all([
+        tx.user.findUnique({
+          where: { id: req.auth!.userId },
+          select: {
+            uploadQuotaBytes: true
+          }
+        }),
+        getUserStorageUsage(tx, req.auth!.userId),
+        tx.video.findFirst({
+          where: {
+            ossKey,
+            deletedAt: null
+          },
+          select: { id: true }
+        }),
+        txUploadSessionStore.findFirst({
+          where: {
+            ossKey,
+            status: {
+              in: [UPLOAD_SESSION_STATUS.INITIATED, UPLOAD_SESSION_STATUS.UPLOADING]
+            }
+          },
+          select: {
+            uploadId: true
+          }
+        })
+      ]);
+
+      if (!user) {
+        throw new HttpError(404, "User not found");
       }
+
+      const remainingQuotaBytes = getRemainingQuotaBytes(
+        user.uploadQuotaBytes,
+        usage.totalSizeBytes,
+        usage.reservedUploadBytes
+      );
+      if (input.fileSizeBytes > remainingQuotaBytes) {
+        throw new HttpError(409, `Upload quota exceeded. Remaining quota is ${remainingQuotaBytes.toString()} bytes`);
+      }
+
+      if (existingVideo || activeSession) {
+        throw new HttpError(409, "Filename already exists. Please rename the file and try again");
+      }
+
+      return await txUploadSessionStore.create({
+        data: {
+          title: input.title,
+          filename,
+          mimeType: input.mimeType,
+          fileSizeBytes: input.fileSizeBytes,
+          uploadId,
+          ossKey,
+          ossUploadId,
+          partSizeBytes: DEFAULT_PART_SIZE_BYTES,
+          uploaderId: req.auth!.userId
+        },
+        select: {
+          uploadId: true,
+          partSizeBytes: true,
+          status: true,
+          uploadedParts: true,
+          fileSizeBytes: true
+        }
+      });
     });
+
+    pendingMultipartUpload = null;
 
     res.status(201).json(serializeUploadSession(session));
   } catch (error) {
+    if (pendingMultipartUpload) {
+      try {
+        await abortMultipartUpload(pendingMultipartUpload.ossKey, pendingMultipartUpload.ossUploadId);
+      } catch (abortError) {
+        console.warn("Failed to abort multipart upload after init failure.", abortError);
+      }
+    }
+
     next(error);
   }
 });

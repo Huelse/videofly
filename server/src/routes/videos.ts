@@ -11,7 +11,12 @@ import { requireAuth, requireRole } from "../middleware/auth.js";
 
 export const videoRouter = Router();
 const videoQuerySchema = z.object({
-  scope: z.enum(["all", "mine"]).default("all")
+  scope: z.enum(["all", "mine"]).default("all"),
+  limit: z.coerce.number().int().positive().max(100).default(20),
+  random: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((value) => value === "true")
 });
 const videoParamsSchema = z.object({
   id: z.string().min(1)
@@ -54,14 +59,13 @@ function authenticatePlaybackRequest(req: Request) {
 
 videoRouter.get("/videos", requireAuth, requireRole([Role.VIEWER, Role.UPLOADER, Role.ADMIN]), async (req, res, next) => {
   try {
-    const { scope } = videoQuerySchema.parse(req.query);
+    const { scope, limit, random } = videoQuerySchema.parse(req.query);
     const videos = await prisma.video.findMany({
       where: {
         ...(scope === "mine" ? { uploaderId: req.auth!.userId } : {}),
         deletedAt: null
       },
       orderBy: { createdAt: "desc" },
-      take: 20,
       select: {
         id: true,
         title: true,
@@ -77,8 +81,16 @@ videoRouter.get("/videos", requireAuth, requireRole([Role.VIEWER, Role.UPLOADER,
       }
     });
 
+    const selectedVideos = random
+      ? videos
+          .map((video) => ({ video, sortKey: Math.random() }))
+          .sort((left, right) => left.sortKey - right.sortKey)
+          .slice(0, limit)
+          .map(({ video }) => video)
+      : videos.slice(0, limit);
+
     res.json({
-      items: await Promise.all(videos.map((video) => serializeVideoWithPlayback(video)))
+      items: await Promise.all(selectedVideos.map((video) => serializeVideoWithPlayback(video)))
     });
   } catch (error) {
     next(error);
@@ -159,7 +171,7 @@ videoRouter.delete("/videos/:id", requireAuth, requireRole([Role.UPLOADER, Role.
 videoRouter.get("/videos/:id/playback", async (req, res, next) => {
   try {
     const { id } = videoParamsSchema.parse(req.params);
-    const auth = authenticatePlaybackRequest(req);
+    authenticatePlaybackRequest(req);
     const video = await prisma.video.findUnique({
       where: { id },
       select: {
@@ -172,10 +184,6 @@ videoRouter.get("/videos/:id/playback", async (req, res, next) => {
 
     if (!video || video.deletedAt) {
       throw new HttpError(404, "Resource not found");
-    }
-
-    if (auth.role !== Role.ADMIN && auth.sub !== video.uploaderId) {
-      throw new HttpError(403, "Insufficient permissions");
     }
 
     const result = await getObjectStream(video.ossKey, req.header("range"));
@@ -209,7 +217,7 @@ videoRouter.get("/videos/:id/playback", async (req, res, next) => {
 videoRouter.get("/videos/:id/preview", async (req, res, next) => {
   try {
     const { id } = videoParamsSchema.parse(req.params);
-    const auth = authenticatePlaybackRequest(req);
+    authenticatePlaybackRequest(req);
     const video = await prisma.video.findUnique({
       where: { id },
       select: {
@@ -222,10 +230,6 @@ videoRouter.get("/videos/:id/preview", async (req, res, next) => {
 
     if (!video || video.deletedAt) {
       throw new HttpError(404, "Resource not found");
-    }
-
-    if (auth.role !== Role.ADMIN && auth.sub !== video.uploaderId) {
-      throw new HttpError(403, "Insufficient permissions");
     }
 
     const result = await getVideoSnapshotStream(video.ossKey);

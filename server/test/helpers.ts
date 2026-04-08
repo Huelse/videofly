@@ -2,6 +2,7 @@ import { Role } from "@prisma/client";
 
 import { hashPassword, signToken } from "../src/lib/auth.js";
 import { prisma } from "../src/lib/prisma.js";
+import { DEFAULT_UPLOAD_QUOTA_BYTES } from "../src/lib/users.js";
 
 export async function resetDatabase() {
   await prisma.video.deleteMany();
@@ -19,24 +20,27 @@ export async function seedAdmin() {
     },
     update: {
       passwordHash,
-      role: Role.ADMIN
+      role: Role.ADMIN,
+      uploadQuotaBytes: DEFAULT_UPLOAD_QUOTA_BYTES
     },
     create: {
       email: "admin@videofly.local",
       passwordHash,
-      role: Role.ADMIN
+      role: Role.ADMIN,
+      uploadQuotaBytes: DEFAULT_UPLOAD_QUOTA_BYTES
     }
   });
 }
 
-export async function createUser(email: string, role: Role = Role.VIEWER) {
+export async function createUser(email: string, role: Role = Role.VIEWER, uploadQuotaBytes: bigint = DEFAULT_UPLOAD_QUOTA_BYTES) {
   const passwordHash = await hashPassword("Viewer1234");
 
   return prisma.user.create({
     data: {
       email,
       passwordHash,
-      role
+      role,
+      uploadQuotaBytes
     }
   });
 }

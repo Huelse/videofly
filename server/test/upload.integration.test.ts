@@ -121,6 +121,49 @@ describe("upload integration", () => {
     expect(detailResponse.body.sizeBytes).toBe("20971520");
   });
 
+  it("blocks upload initialization when the user's quota would be exceeded", async () => {
+    const uploader = await createUser("uploader-quota-blocked@example.com", Role.UPLOADER, 1024n);
+
+    await prisma.video.create({
+      data: {
+        title: "Existing",
+        ossKey: "/upload/existing-quota.mp4",
+        sizeBytes: 700n,
+        status: VideoStatus.READY,
+        uploaderId: uploader.id
+      }
+    });
+
+    await (prisma as typeof prisma & { uploadSession: any }).uploadSession.create({
+      data: {
+        title: "Pending",
+        filename: "pending.mp4",
+        mimeType: "video/mp4",
+        fileSizeBytes: 200n,
+        uploadId: crypto.randomUUID(),
+        ossKey: "/upload/pending.mp4",
+        ossUploadId: "pending-oss-upload-id",
+        partSizeBytes: 8 * 1024 * 1024,
+        status: "INITIATED",
+        uploaderId: uploader.id
+      }
+    });
+
+    const response = await request(app)
+      .post("/api/v1/upload/init")
+      .set("Authorization", createAuthHeader(uploader))
+      .send({
+        title: "Too large",
+        filename: "too-large.mp4",
+        mimeType: "video/mp4",
+        fileSizeBytes: "200"
+      })
+      .expect(409);
+
+    expect(response.body.message).toBe("Upload quota exceeded. Remaining quota is 124 bytes");
+    expect(oss.abortMultipartUpload).toHaveBeenCalledWith(buildOssObjectKey("too-large.mp4"), "oss-upload-id");
+  });
+
   it("completes upload successfully when a soft-deleted video exists for the same filename", async () => {
     const uploader = await createUser("uploader-soft-deleted@example.com", Role.UPLOADER);
     const filename = "reupload-demo.mp4";

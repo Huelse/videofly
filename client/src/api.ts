@@ -7,6 +7,7 @@ export type AuthUser = {
   id: string;
   email: string;
   role: Role;
+  uploadQuotaBytes: string;
   createdAt?: string;
   updatedAt?: string;
   _count?: {
@@ -31,6 +32,9 @@ export type UserListResponse = {
 
 export type UserStorageUsage = {
   totalSizeBytes: string;
+  reservedUploadBytes: string;
+  uploadQuotaBytes: string;
+  remainingQuotaBytes: string;
   videoCount: number;
 };
 
@@ -97,7 +101,14 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}, token?
   const payload = text ? JSON.parse(text) : null;
 
   if (!response.ok) {
-    throw new Error(payload?.message ?? "Request failed");
+    const validationMessage = Array.isArray(payload?.issues)
+      ? payload.issues
+          .map((issue: { message?: string }) => issue?.message)
+          .filter((message: unknown): message is string => Boolean(message))
+          .join("；")
+      : "";
+
+    throw new Error(validationMessage || payload?.message || "Request failed");
   }
 
   return payload as T;

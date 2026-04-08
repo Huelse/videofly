@@ -9,14 +9,18 @@ const router = useRouter();
 
 const navItems = computed(() => {
   const items = [
-    { to: "/dashboard/me", label: "我的信息" },
-    { to: "/dashboard/videos", label: "我的视频" },
-    { to: "/dashboard/upload", label: "上传中心" }
+    { to: "/feed", label: "视频流", external: true },
+    { to: "/dashboard/me", label: "我的信息", external: false }
   ];
 
+  if (authStore.canUpload.value) {
+    items.push({ to: "/dashboard/my-videos", label: "我的视频", external: false });
+    items.push({ to: "/dashboard/upload", label: "上传中心", external: false });
+  }
+
   if (authStore.isAdmin.value) {
-    items.push({ to: "/dashboard/oss", label: "OSS 文件管理" });
-    items.push({ to: "/dashboard/users", label: "用户管理" });
+    items.push({ to: "/dashboard/oss", label: "OSS 文件管理", external: false });
+    items.push({ to: "/dashboard/users", label: "用户管理", external: false });
   }
 
   return items;
@@ -32,15 +36,26 @@ async function logout() {
   <main class="dashboard-shell">
     <aside class="sidebar">
       <div>
-        <p class="eyebrow">Videofly Admin</p>
-        <h1>管理后台</h1>
+        <p class="eyebrow">Videofly</p>
+        <h1>视频中心</h1>
         <p class="user-line">{{ authStore.currentUser.value?.email }}</p>
         <p class="role-pill">{{ authStore.currentUser.value?.role }}</p>
       </div>
 
       <nav class="nav-list">
+        <a
+          v-for="item in navItems.filter((entry) => entry.external)"
+          :key="item.to"
+          :href="item.to"
+          class="nav-link"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {{ item.label }}
+        </a>
+
         <RouterLink
-          v-for="item in navItems"
+          v-for="item in navItems.filter((entry) => !entry.external)"
           :key="item.to"
           :to="item.to"
           class="nav-link"

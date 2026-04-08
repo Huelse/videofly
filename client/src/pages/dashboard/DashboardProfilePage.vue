@@ -3,6 +3,7 @@ import { reactive, ref } from "vue";
 
 import type { AuthUser, UserStorageUsage } from "../../api";
 import { apiRequest } from "../../api";
+import { formatBytes } from "../../lib/storage";
 import { authStore } from "../../stores/auth";
 
 const loading = ref(false);
@@ -11,6 +12,9 @@ const successMessage = ref("");
 const user = ref<AuthUser | null>(null);
 const usage = ref<UserStorageUsage>({
   totalSizeBytes: "0",
+  reservedUploadBytes: "0",
+  uploadQuotaBytes: "0",
+  remainingQuotaBytes: "0",
   videoCount: 0
 });
 const passwordDialogVisible = ref(false);
@@ -39,28 +43,6 @@ async function fetchProfile() {
   } finally {
     loading.value = false;
   }
-}
-
-function formatBytes(sizeBytes: string) {
-  const size = Number(sizeBytes);
-  if (!Number.isFinite(size) || size <= 0) {
-    return "0 B";
-  }
-
-  if (size < 1024) {
-    return `${size} B`;
-  }
-
-  const units = ["KB", "MB", "GB", "TB"];
-  let value = size / 1024;
-  let unitIndex = 0;
-
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-
-  return `${value.toFixed(value >= 10 ? 1 : 2)} ${units[unitIndex]}`;
 }
 
 function openPasswordDialog() {
@@ -155,8 +137,10 @@ void fetchProfile();
 
       <article class="info-card">
         <p class="card-title">存储用量</p>
-        <div class="usage-value">{{ formatBytes(usage.totalSizeBytes) }}</div>
+        <div class="usage-value">{{ formatBytes(usage.totalSizeBytes) }} / {{ formatBytes(usage.uploadQuotaBytes) }}</div>
         <p class="usage-caption">当前有效视频 {{ usage.videoCount }} 个</p>
+        <p class="usage-caption">待完成上传 {{ formatBytes(usage.reservedUploadBytes) }}</p>
+        <p class="usage-caption">剩余额度 {{ formatBytes(usage.remainingQuotaBytes) }}</p>
         <button class="primary-button" type="button" @click="openPasswordDialog">修改密码</button>
       </article>
     </div>

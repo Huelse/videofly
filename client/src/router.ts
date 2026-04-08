@@ -6,6 +6,7 @@ type AppRouteMeta = {
   public?: boolean;
   publicOnly?: boolean;
   requiresAdmin?: boolean;
+  requiresUpload?: boolean;
 };
 
 const dashboardChildren: RouteRecordRaw[] = [
@@ -19,9 +20,10 @@ const dashboardChildren: RouteRecordRaw[] = [
     component: () => import("./pages/dashboard/DashboardProfilePage.vue")
   },
   {
-    path: "videos",
-    name: "dashboard-videos",
-    component: () => import("./pages/dashboard/DashboardVideosPage.vue")
+    path: "my-videos",
+    name: "dashboard-my-videos",
+    component: () => import("./pages/dashboard/DashboardMyVideosPage.vue"),
+    meta: { requiresUpload: true } satisfies AppRouteMeta
   },
   {
     path: "videos/:id",
@@ -31,7 +33,8 @@ const dashboardChildren: RouteRecordRaw[] = [
   {
     path: "upload",
     name: "dashboard-upload",
-    component: () => import("./pages/dashboard/DashboardUploadPage.vue")
+    component: () => import("./pages/dashboard/DashboardUploadPage.vue"),
+    meta: { requiresUpload: true } satisfies AppRouteMeta
   },
   {
     path: "oss",
@@ -67,9 +70,20 @@ const routes: RouteRecordRaw[] = [
     meta: { public: true, publicOnly: true } satisfies AppRouteMeta
   },
   {
+    path: "/feed",
+    name: "feed",
+    component: () => import("./pages/VideoFeedPage.vue")
+  },
+  {
     path: "/dashboard",
     component: () => import("./pages/dashboard/DashboardLayout.vue"),
     children: dashboardChildren
+  },
+  {
+    path: "/:pathMatch(.*)*",
+    name: "not-found",
+    component: () => import("./pages/NotFoundPage.vue"),
+    meta: { public: true } satisfies AppRouteMeta
   }
 ];
 
@@ -96,6 +110,10 @@ router.beforeEach(async (to) => {
 
   if (meta.requiresAdmin && authStore.currentUser.value?.role !== "ADMIN") {
     return { name: "dashboard-me" };
+  }
+
+  if (meta.requiresUpload && !authStore.canUpload.value) {
+    return { name: "feed" };
   }
 
   return true;

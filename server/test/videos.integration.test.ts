@@ -86,9 +86,32 @@ describe("videos integration", () => {
     });
   });
 
+  it("returns a randomized limited video list for all registered users", async () => {
+    const uploader = await createUser("video-random-uploader@example.com", Role.UPLOADER);
+    const viewer = await createUser("video-random-viewer@example.com", Role.VIEWER);
+
+    await prisma.video.createMany({
+      data: Array.from({ length: 12 }, (_, index) => ({
+        title: `Random video ${index + 1}`,
+        ossKey: `/upload/random-${index + 1}.mp4`,
+        sizeBytes: BigInt(2048 + index),
+        status: VideoStatus.READY,
+        uploaderId: uploader.id
+      }))
+    });
+
+    const response = await request(app)
+      .get("/api/v1/videos?scope=all&limit=10&random=true")
+      .set("Authorization", createAuthHeader(viewer))
+      .expect(200);
+
+    expect(response.body.items).toHaveLength(10);
+  });
+
   it("streams playback through the api for authenticated users", async () => {
     const uploader = await createUser("video-playback@example.com", Role.UPLOADER);
-    const token = createAuthHeader(uploader).slice(7);
+    const viewer = await createUser("video-playback-viewer@example.com", Role.VIEWER);
+    const token = createAuthHeader(viewer).slice(7);
     const video = await prisma.video.create({
       data: {
         title: "Playback demo",
@@ -111,7 +134,8 @@ describe("videos integration", () => {
 
   it("streams preview images through the api with cache headers", async () => {
     const uploader = await createUser("video-preview@example.com", Role.UPLOADER);
-    const token = createAuthHeader(uploader).slice(7);
+    const viewer = await createUser("video-preview-viewer@example.com", Role.VIEWER);
+    const token = createAuthHeader(viewer).slice(7);
     const video = await prisma.video.create({
       data: {
         title: "Preview demo",

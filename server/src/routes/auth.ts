@@ -7,19 +7,20 @@ import { createPasswordResetToken, hashPassword, hashResetToken, signToken, veri
 import { config } from "../config.js";
 import { HttpError } from "../lib/errors.js";
 import { requireAuth } from "../middleware/auth.js";
+import { serializeUser } from "../lib/users.js";
 
 const registerSchema = z.object({
-  email: z.string().email(),
+  email: z.string().trim().toLowerCase().email(),
   password: z.string().min(8)
 });
 
 const loginSchema = z.object({
-  email: z.string().email(),
+  email: z.string().trim().toLowerCase().email(),
   password: z.string().min(8)
 });
 
 const resetPasswordRequestSchema = z.object({
-  email: z.string().email()
+  email: z.string().trim().toLowerCase().email()
 });
 
 const resetPasswordSchema = z.object({
@@ -44,11 +45,12 @@ authRouter.post("/register", async (req, res, next) => {
         id: true,
         email: true,
         role: true,
+        uploadQuotaBytes: true,
         createdAt: true
       }
     });
 
-    res.status(201).json(user);
+    res.status(201).json(serializeUser(user));
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       return next(new HttpError(409, "Email already exists"));
@@ -79,11 +81,7 @@ authRouter.post("/login", async (req, res, next) => {
 
     return res.json({
       token,
-      user: {
-        id: user.id,
-        email: user.email,
-        role: user.role
-      }
+      user: serializeUser(user)
     });
   } catch (error) {
     next(error);

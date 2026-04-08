@@ -14,6 +14,23 @@ const errorMessage = ref("");
 const loading = ref(false);
 
 async function submit() {
+  const email = form.email.trim().toLowerCase();
+
+  if (!email) {
+    errorMessage.value = "请输入邮箱";
+    return;
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    errorMessage.value = "请输入有效邮箱地址";
+    return;
+  }
+
+  if (form.password.length < 8) {
+    errorMessage.value = "密码至少需要 8 位";
+    return;
+  }
+
   if (form.password !== form.confirmPassword) {
     errorMessage.value = "两次输入的密码不一致";
     return;
@@ -23,7 +40,7 @@ async function submit() {
   errorMessage.value = "";
 
   try {
-    await authStore.register(form.email, form.password);
+    await authStore.register(email, form.password);
     await router.push({ name: "dashboard-me" });
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : "注册失败";
@@ -45,15 +62,15 @@ async function submit() {
       <form class="auth-form" @submit.prevent="submit">
         <label class="field">
           <span>邮箱</span>
-          <input v-model="form.email" type="email" autocomplete="username" />
+          <input v-model.trim="form.email" type="email" autocomplete="username" required />
         </label>
         <label class="field">
           <span>密码</span>
-          <input v-model="form.password" type="password" autocomplete="new-password" />
+          <input v-model="form.password" type="password" autocomplete="new-password" minlength="8" required />
         </label>
         <label class="field">
           <span>确认密码</span>
-          <input v-model="form.confirmPassword" type="password" autocomplete="new-password" />
+          <input v-model="form.confirmPassword" type="password" autocomplete="new-password" minlength="8" required />
         </label>
         <button class="primary-button" :disabled="loading">
           {{ loading ? "注册中..." : "注册并进入后台" }}

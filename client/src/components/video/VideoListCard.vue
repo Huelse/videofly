@@ -1,7 +1,7 @@
 <script setup lang="ts">
 const props = defineProps<{
   title: string;
-  detailTo: string;
+  detailTo?: string;
   previewUrl: string;
   previewEnabled: boolean;
   sizeLabel: string;
@@ -10,16 +10,21 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   previewError: [];
+  select: [];
 }>();
 
 function handlePreviewError() {
   emit("previewError");
 }
+
+function handleSelect() {
+  emit("select");
+}
 </script>
 
 <template>
   <article class="video-card">
-    <RouterLink class="card-link" :to="props.detailTo">
+    <RouterLink v-if="props.detailTo" class="card-link" :to="props.detailTo">
       <div class="card-poster">
         <img
           v-if="props.previewEnabled"
@@ -32,6 +37,19 @@ function handlePreviewError() {
         <strong>{{ props.title }}</strong>
       </div>
     </RouterLink>
+    <button v-else class="card-link card-button" type="button" @click="handleSelect">
+      <div class="card-poster">
+        <img
+          v-if="props.previewEnabled"
+          class="poster-image"
+          :src="props.previewUrl"
+          :alt="props.title"
+          loading="lazy"
+          @error="handlePreviewError"
+        />
+        <strong>{{ props.title }}</strong>
+      </div>
+    </button>
 
     <div class="card-body">
       <p class="meta-line">{{ props.sizeLabel }}</p>
@@ -51,6 +69,15 @@ function handlePreviewError() {
 .card-link {
   color: inherit;
   text-decoration: none;
+}
+
+.card-button {
+  width: 100%;
+  border: none;
+  padding: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
 }
 
 .card-poster {

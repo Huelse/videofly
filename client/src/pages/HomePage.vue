@@ -8,7 +8,7 @@ import { RouterLink } from "vue-router";
       <p class="eyebrow">Videofly</p>
       <h1>视频上传平台管理后台</h1>
       <p class="lead">
-        从主页进入登录或注册。认证成功后将跳转到后台，左侧是功能导航，右侧默认展示你自己的视频列表。
+        从主页进入登录或注册。认证成功后将跳转到后台，可从侧边栏以新浏览器窗口打开独立的视频流页面。
       </p>
       <div class="hero-actions">
         <RouterLink class="primary-link" to="/login">登录</RouterLink>

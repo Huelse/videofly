@@ -5,10 +5,15 @@ import { z } from "zod";
 import { hashPassword, verifyPassword } from "../lib/auth.js";
 import { HttpError } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
+import { getRemainingQuotaBytes, getUserStorageUsage, serializeUser } from "../lib/users.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 
 const updateRoleSchema = z.object({
   role: z.nativeEnum(Role)
+});
+
+const updateUploadQuotaSchema = z.object({
+  uploadQuotaBytes: z.coerce.bigint().nonnegative()
 });
 
 const userParamsSchema = z.object({
@@ -37,6 +42,7 @@ userRouter.get("/me", async (req, res, next) => {
         id: true,
         email: true,
         role: true,
+        uploadQuotaBytes: true,
         createdAt: true,
         updatedAt: true,
         _count: {
@@ -51,7 +57,7 @@ userRouter.get("/me", async (req, res, next) => {
       throw new HttpError(404, "User not found");
     }
 
-    res.json(user);
+    res.json(serializeUser(user));
   } catch (error) {
     next(error);
   }
@@ -59,22 +65,32 @@ userRouter.get("/me", async (req, res, next) => {
 
 userRouter.get("/me/storage", async (req, res, next) => {
   try {
-    const usage = await prisma.video.aggregate({
-      where: {
-        uploaderId: req.auth!.userId,
-        deletedAt: null
-      },
-      _sum: {
-        sizeBytes: true
-      },
-      _count: {
-        _all: true
-      }
-    });
+    const [user, usage] = await Promise.all([
+      prisma.user.findUnique({
+        where: { id: req.auth!.userId },
+        select: {
+          uploadQuotaBytes: true
+        }
+      }),
+      getUserStorageUsage(prisma, req.auth!.userId)
+    ]);
+
+    if (!user) {
+      throw new HttpError(404, "User not found");
+    }
+
+    const remainingQuotaBytes = getRemainingQuotaBytes(
+      user.uploadQuotaBytes,
+      usage.totalSizeBytes,
+      usage.reservedUploadBytes
+    );
 
     res.json({
-      totalSizeBytes: (usage._sum.sizeBytes ?? BigInt(0)).toString(),
-      videoCount: usage._count._all
+      totalSizeBytes: usage.totalSizeBytes.toString(),
+      reservedUploadBytes: usage.reservedUploadBytes.toString(),
+      uploadQuotaBytes: user.uploadQuotaBytes.toString(),
+      remainingQuotaBytes: remainingQuotaBytes.toString(),
+      videoCount: usage.videoCount
     });
   } catch (error) {
     next(error);
@@ -128,6 +144,7 @@ userRouter.get("/", requireRole([Role.ADMIN]), async (req, res, next) => {
           id: true,
           email: true,
           role: true,
+          uploadQuotaBytes: true,
           createdAt: true,
           updatedAt: true,
           _count: {
@@ -141,7 +158,7 @@ userRouter.get("/", requireRole([Role.ADMIN]), async (req, res, next) => {
     ]);
 
     res.json({
-      items,
+      items: items.map((item) => serializeUser(item)),
       pagination: {
         page,
         pageSize,
@@ -166,11 +183,35 @@ userRouter.put("/:id/role", requireRole([Role.ADMIN]), async (req, res, next) =>
         id: true,
         email: true,
         role: true,
+        uploadQuotaBytes: true,
         updatedAt: true
       }
     });
 
-    res.json(user);
+    res.json(serializeUser(user));
+  } catch (error) {
+    next(error);
+  }
+});
+
+userRouter.put("/:id/quota", requireRole([Role.ADMIN]), async (req, res, next) => {
+  try {
+    const { id } = userParamsSchema.parse(req.params);
+    const { uploadQuotaBytes } = updateUploadQuotaSchema.parse(req.body);
+
+    const user = await prisma.user.update({
+      where: { id },
+      data: { uploadQuotaBytes },
+      select: {
+        id: true,
+        email: true,
+        role: true,
+        uploadQuotaBytes: true,
+        updatedAt: true
+      }
+    });
+
+    res.json(serializeUser(user));
   } catch (error) {
     next(error);
   }

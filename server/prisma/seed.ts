@@ -1,6 +1,8 @@
 import bcrypt from "bcryptjs";
 import { PrismaClient, Role } from "@prisma/client";
 
+import { DEFAULT_UPLOAD_QUOTA_BYTES } from "../src/lib/users.js";
+
 const prisma = new PrismaClient();
 
 async function main() {
@@ -8,11 +10,16 @@ async function main() {
 
   await prisma.user.upsert({
     where: { email: "admin@videofly.local" },
-    update: {},
+    update: {
+      passwordHash,
+      role: Role.ADMIN,
+      uploadQuotaBytes: DEFAULT_UPLOAD_QUOTA_BYTES
+    },
     create: {
       email: "admin@videofly.local",
       passwordHash,
-      role: Role.ADMIN
+      role: Role.ADMIN,
+      uploadQuotaBytes: DEFAULT_UPLOAD_QUOTA_BYTES
     }
   });
 }

@@ -4,6 +4,7 @@ import { onMounted, ref } from "vue";
 import type { VideoItem } from "../../api";
 import { apiBaseUrl, apiRequest } from "../../api";
 import VideoListCard from "../../components/video/VideoListCard.vue";
+import { formatBytes } from "../../lib/storage";
 import { authStore } from "../../stores/auth";
 
 const videos = ref<VideoItem[]>([]);
@@ -40,28 +41,6 @@ function handlePreviewError(videoId: string) {
   failedPreviewIds.value = next;
 }
 
-function formatBytes(sizeBytes: string) {
-  const size = Number(sizeBytes);
-  if (!Number.isFinite(size) || size <= 0) {
-    return "--";
-  }
-
-  if (size < 1024) {
-    return `${size} B`;
-  }
-
-  const units = ["KB", "MB", "GB", "TB"];
-  let value = size / 1024;
-  let unitIndex = 0;
-
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-
-  return `${value.toFixed(value >= 10 ? 1 : 2)} ${units[unitIndex]}`;
-}
-
 onMounted(fetchVideos);
 </script>
 
@@ -70,7 +49,7 @@ onMounted(fetchVideos);
     <div class="page-head">
       <div>
         <p class="eyebrow">My Videos</p>
-        <h2>我的视频列表</h2>
+        <h2>我的视频</h2>
       </div>
       <button class="ghost-button" :disabled="loading" @click="fetchVideos">
         {{ loading ? "刷新中..." : "刷新列表" }}

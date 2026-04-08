@@ -227,3 +227,8 @@ GET	/metrics	（可选）Prometheus 指标
 - README 里写的是“OSS 预签名 URL 播放”，当前实现实际是服务端代理 OSS 流式播放和预览图获取。
 - OpenAPI / Swagger 文档尚未实现。
 - `POST /auth/refresh`、`DELETE /videos/:id/permanent`、`/metrics` 这些文档中列出的接口当前仍未提供。
+
+## 已知限制
+
+* 邮箱注册最好通过发送邮件注册链接完成注册，时间有限当前任意邮箱均可直接注册成功
+* OSS 预签名 URL 播放需要配置CNAME域名，暂无法实现

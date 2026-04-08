@@ -14,6 +14,13 @@ const loading = ref(false);
 const errorMessage = ref("");
 const playbackErrorMessage = ref("");
 const deleting = ref(false);
+const canDelete = computed(() => {
+  if (!video.value || !authStore.currentUser.value) {
+    return false;
+  }
+
+  return authStore.currentUser.value.role === "ADMIN" || authStore.currentUser.value.id === video.value.uploaderId;
+});
 
 const playbackUrl = computed(() => {
   if (!video.value || !authStore.token.value) {
@@ -55,7 +62,7 @@ async function deleteVideo() {
 
   try {
     await apiRequest<null>(`/videos/${video.value.id}`, { method: "DELETE" }, authStore.token.value);
-    await router.push("/dashboard/videos");
+    await router.push("/feed");
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : "视频删除失败";
   } finally {
@@ -95,7 +102,7 @@ onMounted(fetchVideo);
         <p class="eyebrow">Video Detail</p>
         <h2>视频详情</h2>
       </div>
-      <RouterLink class="ghost-link" to="/dashboard/videos">返回列表</RouterLink>
+      <RouterLink class="ghost-link" to="/feed">返回视频流</RouterLink>
     </div>
 
     <p v-if="errorMessage" class="error-text">{{ errorMessage }}</p>
@@ -136,7 +143,7 @@ onMounted(fetchVideo);
           <span>OSS Key</span>
           <strong class="mono">{{ video.ossKey }}</strong>
         </div>
-        <div class="info-actions">
+        <div v-if="canDelete" class="info-actions">
           <button class="danger-button" type="button" :disabled="deleting" @click="deleteVideo">
             {{ deleting ? "删除中..." : "删除视频" }}
           </button>

@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { createApp } from "../src/app.js";
 import { createPasswordResetToken, hashResetToken, verifyPassword } from "../src/lib/auth.js";
 import { prisma } from "../src/lib/prisma.js";
+import { DEFAULT_UPLOAD_QUOTA_BYTES } from "../src/lib/users.js";
 import { createAuthHeader, createUser, resetDatabase, seedAdmin } from "./helpers.js";
 
 const app = createApp();
@@ -33,6 +34,7 @@ describe("auth and user management integration", () => {
 
     expect(response.body.email).toBe("viewer@example.com");
     expect(response.body.role).toBe(Role.VIEWER);
+    expect(response.body.uploadQuotaBytes).toBe(DEFAULT_UPLOAD_QUOTA_BYTES.toString());
 
     const user = await prisma.user.findUnique({
       where: { email: "viewer@example.com" }
@@ -63,6 +65,7 @@ describe("auth and user management integration", () => {
 
     expect(response.body.email).toBe("viewer-me@example.com");
     expect(response.body.role).toBe(Role.VIEWER);
+    expect(response.body.uploadQuotaBytes).toBe(DEFAULT_UPLOAD_QUOTA_BYTES.toString());
   });
 
   it("returns the current user's storage usage", async () => {
@@ -101,6 +104,9 @@ describe("auth and user management integration", () => {
       .expect(200);
 
     expect(response.body.totalSizeBytes).toBe("3072");
+    expect(response.body.reservedUploadBytes).toBe("0");
+    expect(response.body.uploadQuotaBytes).toBe(DEFAULT_UPLOAD_QUOTA_BYTES.toString());
+    expect(response.body.remainingQuotaBytes).toBe((DEFAULT_UPLOAD_QUOTA_BYTES - 3072n).toString());
     expect(response.body.videoCount).toBe(2);
   });
 
@@ -143,6 +149,27 @@ describe("auth and user management integration", () => {
     });
 
     expect(updated.role).toBe(Role.UPLOADER);
+  });
+
+  it("allows an admin to update another user's upload quota", async () => {
+    const viewer = await createUser("viewer-quota@example.com");
+    const admin = await prisma.user.findUniqueOrThrow({
+      where: { email: "admin@videofly.local" }
+    });
+
+    const response = await request(app)
+      .put(`/api/v1/users/${viewer.id}/quota`)
+      .set("Authorization", createAuthHeader(admin))
+      .send({ uploadQuotaBytes: "2147483648" })
+      .expect(200);
+
+    expect(response.body.uploadQuotaBytes).toBe("2147483648");
+
+    const updated = await prisma.user.findUniqueOrThrow({
+      where: { id: viewer.id }
+    });
+
+    expect(updated.uploadQuotaBytes).toBe(2147483648n);
   });
 
   it("creates a password reset record without leaking account existence", async () => {
