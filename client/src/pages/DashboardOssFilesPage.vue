@@ -5,6 +5,7 @@ import { RouterLink } from "vue-router";
 import type { VideoItem } from "../api";
 import { apiRequest } from "../api";
 import { authStore } from "../stores/auth";
+import { formatVideoStatus } from "../video-status";
 
 const videos = ref<VideoItem[]>([]);
 const loading = ref(false);
@@ -19,7 +20,9 @@ const filteredVideos = computed(() => {
   }
 
   return videos.value.filter((video) => {
-    return [video.title, video.status, video.uploader.email, video.id].some((value) => value.toLowerCase().includes(query));
+    return [video.title, video.status, formatVideoStatus(video.status), video.uploader.email, video.id].some((value) =>
+      value.toLowerCase().includes(query)
+    );
   });
 });
 
@@ -70,7 +73,7 @@ onMounted(fetchVideos);
         <div class="file-main">
           <div class="title-row">
             <RouterLink class="title-link" :to="`/dashboard/videos/${video.id}`">{{ video.title }}</RouterLink>
-            <span class="status-pill">{{ video.status }}</span>
+            <span class="status-pill">{{ formatVideoStatus(video.status) }}</span>
           </div>
           <p class="meta-line">
             <span>{{ video.uploader.email }}</span>

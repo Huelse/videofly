@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+
 import { Role, VideoStatus } from "@prisma/client";
 import request from "supertest";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,12 +20,7 @@ describe("upload integration", () => {
   beforeEach(async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(oss, "initMultipartUpload").mockResolvedValue("oss-upload-id");
-    vi.spyOn(oss, "getSignedUploadPartUrl").mockImplementation(async (_objectKey, _ossUploadId, partNumber) => ({
-      url: `https://oss.test/upload-part-${partNumber}`,
-      expiresInSeconds: 900,
-      method: "PUT"
-    }));
-    vi.spyOn(oss, "listUploadedParts").mockResolvedValue([{ number: 1, etag: "\"etag-1\"" }]);
+    vi.spyOn(oss, "uploadMultipartPart").mockImplementation(async (_objectKey, _ossUploadId, partNumber) => `etag-${partNumber}`);
     vi.spyOn(oss, "completeMultipartUpload").mockResolvedValue({} as never);
     vi.spyOn(oss, "abortMultipartUpload").mockResolvedValue({} as never);
     await resetDatabase();
@@ -56,13 +53,6 @@ describe("upload integration", () => {
 
   it("allows uploaders to initialize, upload parts, inspect status and complete uploads", async () => {
     const uploader = await createUser("uploader@example.com", Role.UPLOADER);
-    vi.spyOn(oss, "listUploadedParts")
-      .mockResolvedValueOnce([{ number: 1, etag: "\"etag-1\"" }])
-      .mockResolvedValueOnce([
-        { number: 1, etag: "\"etag-1\"" },
-        { number: 2, etag: "\"etag-2\"" },
-        { number: 3, etag: "\"etag-3\"" }
-      ]);
 
     const initResponse = await request(app)
       .post("/api/v1/upload/init")
@@ -78,26 +68,31 @@ describe("upload integration", () => {
     expect(initResponse.body.status).toBe(UPLOAD_SESSION_STATUS.INITIATED);
 
     const uploadId = initResponse.body.uploadId as string;
+    const partBuffers = [
+      Buffer.alloc(8 * 1024 * 1024, "a"),
+      Buffer.alloc(8 * 1024 * 1024, "b"),
+      Buffer.alloc(4 * 1024 * 1024, "c")
+    ];
 
-    const partResponse = await request(app)
-      .post("/api/v1/upload/part")
-      .set("Authorization", createAuthHeader(uploader))
-      .send({
-        uploadId,
-        partNumber: 1
-      })
-      .expect(200);
+    for (const [index, partBuffer] of partBuffers.entries()) {
+      const partNumber = index + 1;
+      const checksum = crypto.createHash("sha256").update(partBuffer).digest("hex");
 
-    expect(partResponse.body.status).toBe(UPLOAD_SESSION_STATUS.UPLOADING);
-    expect(partResponse.body.method).toBe("PUT");
-    expect(partResponse.body.url).toContain("upload-part-1");
+      await request(app)
+        .put(`/api/v1/upload/part/upload?uploadId=${uploadId}&partNumber=${partNumber}`)
+        .set("Authorization", createAuthHeader(uploader))
+        .set("x-part-sha256", checksum)
+        .set("Content-Type", "application/octet-stream")
+        .send(partBuffer)
+        .expect(200);
+    }
 
     const statusResponse = await request(app)
       .get(`/api/v1/upload/status/${uploadId}`)
       .set("Authorization", createAuthHeader(uploader))
       .expect(200);
 
-    expect(statusResponse.body.uploadedParts).toEqual([1]);
+    expect(statusResponse.body.uploadedParts).toEqual([1, 2, 3]);
 
     const completeResponse = await request(app)
       .post("/api/v1/upload/complete")
@@ -113,7 +108,7 @@ describe("upload integration", () => {
     });
 
     expect(video.uploaderId).toBe(uploader.id);
-    expect(video.ossKey).toContain(uploadId);
+    expect(video.ossKey).toContain("/upload/");
 
     const detailResponse = await request(app)
       .get(`/api/v1/videos/${video.id}`)
@@ -121,8 +116,53 @@ describe("upload integration", () => {
       .expect(200);
 
     expect(detailResponse.body.id).toBe(video.id);
-    expect(detailResponse.body.ossKey).toContain(uploadId);
+    expect(detailResponse.body.ossKey).toContain("/upload/");
     expect(detailResponse.body.sizeBytes).toBe("20971520");
+  });
+
+  it("keeps all uploaded parts when the last batch is uploaded concurrently", async () => {
+    const uploader = await createUser("uploader-concurrent@example.com", Role.UPLOADER);
+
+    const initResponse = await request(app)
+      .post("/api/v1/upload/init")
+      .set("Authorization", createAuthHeader(uploader))
+      .send({
+        title: "Concurrent demo",
+        filename: "concurrent-demo.mp4",
+        mimeType: "video/mp4",
+        fileSizeBytes: String(4 * 8 * 1024 * 1024)
+      })
+      .expect(201);
+
+    const uploadId = initResponse.body.uploadId as string;
+    const partBuffers = [
+      Buffer.alloc(8 * 1024 * 1024, "d"),
+      Buffer.alloc(8 * 1024 * 1024, "e"),
+      Buffer.alloc(8 * 1024 * 1024, "f"),
+      Buffer.alloc(8 * 1024 * 1024, "g")
+    ];
+
+    await Promise.all(
+      partBuffers.map(async (partBuffer, index) => {
+        const partNumber = index + 1;
+        const checksum = crypto.createHash("sha256").update(partBuffer).digest("hex");
+
+        await request(app)
+          .put(`/api/v1/upload/part/upload?uploadId=${uploadId}&partNumber=${partNumber}`)
+          .set("Authorization", createAuthHeader(uploader))
+          .set("x-part-sha256", checksum)
+          .set("Content-Type", "application/octet-stream")
+          .send(partBuffer)
+          .expect(200);
+      })
+    );
+
+    const statusResponse = await request(app)
+      .get(`/api/v1/upload/status/${uploadId}`)
+      .set("Authorization", createAuthHeader(uploader))
+      .expect(200);
+
+    expect(statusResponse.body.uploadedParts).toEqual([1, 2, 3, 4]);
   });
 
   it("allows canceling an upload session", async () => {

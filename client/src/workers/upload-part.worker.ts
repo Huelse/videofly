@@ -7,6 +7,7 @@ type UploadWorkerRequest = {
   token: string;
   contentType: string;
   maxAttempts?: number;
+  timeoutMs?: number;
 };
 
 type UploadWorkerSuccess = {
@@ -32,6 +33,20 @@ function respond(message: UploadWorkerSuccess | UploadWorkerError) {
   self.postMessage(message);
 }
 
+async function fetchWithTimeout(input: string, init: RequestInit, timeoutMs: number) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(new Error(`Request timed out after ${timeoutMs}ms`)), timeoutMs);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function sha256Hex(blob: Blob) {
   const buffer = await blob.arrayBuffer();
   const digest = await crypto.subtle.digest("SHA-256", buffer);
@@ -48,20 +63,25 @@ self.onmessage = async (event: MessageEvent<UploadWorkerRequest>) => {
   }
 
   const maxAttempts = payload.maxAttempts ?? 3;
+  const timeoutMs = payload.timeoutMs ?? 90_000;
   let lastError = "Part upload failed";
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       const checksum = await sha256Hex(payload.chunk);
-      const response = await fetch(payload.url, {
-        method: payload.method,
-        body: payload.chunk,
-        headers: {
-          Authorization: `Bearer ${payload.token}`,
-          "Content-Type": payload.contentType,
-          "x-part-sha256": checksum
-        }
-      });
+      const response = await fetchWithTimeout(
+        payload.url,
+        {
+          method: payload.method,
+          body: payload.chunk,
+          headers: {
+            Authorization: `Bearer ${payload.token}`,
+            "Content-Type": payload.contentType,
+            "x-part-sha256": checksum
+          }
+        },
+        timeoutMs
+      );
 
       if (!response.ok) {
         const text = await response.text();

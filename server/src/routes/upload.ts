@@ -23,7 +23,6 @@ const ALLOWED_TYPES = new Set([
 ]);
 
 const DEFAULT_PART_SIZE_BYTES = 8 * 1024 * 1024;
-const uploadSessionStore = (prisma as typeof prisma & { uploadSession: any }).uploadSession;
 const UPLOAD_SESSION_STATUS = {
   INITIATED: "INITIATED",
   UPLOADING: "UPLOADING",
@@ -73,6 +72,20 @@ type SerializedUploadSessionInput = {
   createdAt?: Date;
   updatedAt?: Date;
 };
+
+type UploadSessionStoreLike = {
+  create: (...args: any[]) => Promise<any>;
+  findFirst: (...args: any[]) => Promise<any>;
+  findMany: (...args: any[]) => Promise<any>;
+  findUnique: (...args: any[]) => Promise<any>;
+  update: (...args: any[]) => Promise<any>;
+};
+
+function getUploadSessionStore(client: { uploadSession: UploadSessionStoreLike }) {
+  return client.uploadSession;
+}
+
+const uploadSessionStore = getUploadSessionStore(prisma);
 
 function normalizeStoredUploadParts(value: unknown): StoredUploadPart[] {
   if (!Array.isArray(value)) {
@@ -141,8 +154,11 @@ uploadRouter.post("/init", async (req, res, next) => {
     const uploadId = crypto.randomUUID();
     const filename = input.filename;
     const ossKey = buildOssObjectKey(input.filename);
-    const existingVideo = await prisma.video.findUnique({
-      where: { ossKey },
+    const existingVideo = await prisma.video.findFirst({
+      where: {
+        ossKey,
+        deletedAt: null
+      },
       select: { id: true }
     });
 
@@ -288,29 +304,59 @@ uploadRouter.put("/part/upload", raw({ type: "*/*", limit: "20mb" }), async (req
       throw new HttpError(502, "OSS upload did not return an ETag");
     }
 
-    const uploadedParts = normalizeStoredUploadParts(session.uploadedParts);
-    const dedupedParts = [
-      ...uploadedParts.filter((part) => part.number !== input.partNumber),
-      {
-        number: input.partNumber,
-        etag,
-        checksum: computedChecksum
-      }
-    ].sort((a, b) => a.number - b.number);
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`
+        SELECT 1
+        FROM "UploadSession"
+        WHERE "uploadId" = ${input.uploadId}
+        FOR UPDATE
+      `;
 
-    const updated = await uploadSessionStore.update({
-      where: { uploadId: input.uploadId },
-      data: {
-        status: UPLOAD_SESSION_STATUS.UPLOADING,
-        uploadedParts: dedupedParts
-      },
-      select: {
-        uploadId: true,
-        status: true,
-        partSizeBytes: true,
-        fileSizeBytes: true,
-        uploadedParts: true
+      const txUploadSessionStore = getUploadSessionStore(tx);
+      const lockedSession = await txUploadSessionStore.findUnique({
+        where: { uploadId: input.uploadId },
+        select: {
+          status: true,
+          uploadedParts: true
+        }
+      });
+
+      if (!lockedSession) {
+        throw new HttpError(404, "Upload session not found");
       }
+
+      if (lockedSession.status === UPLOAD_SESSION_STATUS.CANCELED) {
+        throw new HttpError(400, "Upload session has been canceled");
+      }
+
+      if (lockedSession.status === UPLOAD_SESSION_STATUS.COMPLETED) {
+        throw new HttpError(400, "Upload session has already completed");
+      }
+
+      const uploadedParts = normalizeStoredUploadParts(lockedSession?.uploadedParts);
+      const dedupedParts = [
+        ...uploadedParts.filter((part) => part.number !== input.partNumber),
+        {
+          number: input.partNumber,
+          etag,
+          checksum: computedChecksum
+        }
+      ].sort((a, b) => a.number - b.number);
+
+      return await txUploadSessionStore.update({
+        where: { uploadId: input.uploadId },
+        data: {
+          status: UPLOAD_SESSION_STATUS.UPLOADING,
+          uploadedParts: dedupedParts
+        },
+        select: {
+          uploadId: true,
+          status: true,
+          partSizeBytes: true,
+          fileSizeBytes: true,
+          uploadedParts: true
+        }
+      });
     });
 
     res.json(serializeUploadSession(updated));
@@ -351,15 +397,18 @@ uploadRouter.post("/complete", async (req, res, next) => {
 
     await completeMultipartUpload(session.ossKey, session.ossUploadId, uploadedParts);
 
-    const [, video] = await prisma.$transaction([
-      uploadSessionStore.update({
+    const video = await prisma.$transaction(async (tx) => {
+      const txUploadSessionStore = getUploadSessionStore(tx);
+
+      await txUploadSessionStore.update({
         where: { uploadId: input.uploadId },
         data: {
           status: UPLOAD_SESSION_STATUS.COMPLETED,
           uploadedParts
         }
-      }),
-      prisma.video.create({
+      });
+
+      return await tx.video.create({
         data: {
           title: session.title,
           ossKey: session.ossKey,
@@ -374,8 +423,8 @@ uploadRouter.post("/complete", async (req, res, next) => {
           sizeBytes: true,
           ossKey: true
         }
-      })
-    ]);
+      });
+    });
 
     res.status(201).json({
       ...video,

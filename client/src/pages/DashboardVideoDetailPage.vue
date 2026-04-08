@@ -1,15 +1,25 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 
 import type { VideoDetail } from "../api";
-import { apiRequest } from "../api";
+import { apiBaseUrl, apiRequest } from "../api";
 import { authStore } from "../stores/auth";
+import { formatVideoStatus } from "../video-status";
 
 const route = useRoute();
 const video = ref<VideoDetail | null>(null);
 const loading = ref(false);
 const errorMessage = ref("");
+const playbackErrorMessage = ref("");
+
+const playbackUrl = computed(() => {
+  if (!video.value || !authStore.token.value) {
+    return "";
+  }
+
+  return `${apiBaseUrl}/videos/${video.value.id}/playback?token=${encodeURIComponent(authStore.token.value)}`;
+});
 
 async function fetchVideo() {
   loading.value = true;
@@ -22,6 +32,32 @@ async function fetchVideo() {
   } finally {
     loading.value = false;
   }
+}
+
+function handlePlaybackError() {
+  playbackErrorMessage.value = "视频播放失败，请刷新页面后重试";
+}
+
+function formatBytes(sizeBytes: string) {
+  const size = Number(sizeBytes);
+  if (!Number.isFinite(size) || size <= 0) {
+    return "--";
+  }
+
+  if (size < 1024) {
+    return `${size} B`;
+  }
+
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = size / 1024;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  return `${value.toFixed(value >= 10 ? 1 : 2)} ${units[unitIndex]}`;
 }
 
 onMounted(fetchVideo);
@@ -40,34 +76,41 @@ onMounted(fetchVideo);
     <p v-if="errorMessage" class="error-text">{{ errorMessage }}</p>
     <p v-else-if="loading" class="helper">加载中...</p>
 
-    <div v-if="video" class="detail-grid">
-      <div class="detail-card">
-        <span>标题</span>
-        <strong>{{ video.title }}</strong>
+    <div v-if="video" class="detail-layout">
+      <div class="player-card">
+        <video class="player" :src="playbackUrl" controls playsinline preload="metadata" @error="handlePlaybackError" />
+        <p v-if="playbackErrorMessage" class="error-text">{{ playbackErrorMessage }}</p>
       </div>
-      <div class="detail-card">
-        <span>状态</span>
-        <strong>{{ video.status }}</strong>
-      </div>
-      <div class="detail-card">
-        <span>大小</span>
-        <strong>{{ video.sizeBytes }} bytes</strong>
-      </div>
-      <div class="detail-card">
-        <span>上传者</span>
-        <strong>{{ video.uploader.email }}</strong>
-      </div>
-      <div class="detail-card full">
-        <span>OSS Key</span>
-        <strong class="mono">{{ video.ossKey }}</strong>
-      </div>
-      <div class="detail-card">
-        <span>创建时间</span>
-        <strong>{{ new Date(video.createdAt).toLocaleString() }}</strong>
-      </div>
-      <div class="detail-card">
-        <span>更新时间</span>
-        <strong>{{ new Date(video.updatedAt).toLocaleString() }}</strong>
+
+      <div class="info-card">
+        <div class="info-row">
+          <span>标题</span>
+          <strong>{{ video.title }}</strong>
+        </div>
+        <div class="info-row">
+          <span>状态</span>
+          <strong>{{ formatVideoStatus(video.status) }}</strong>
+        </div>
+        <div class="info-row">
+          <span>大小</span>
+          <strong>{{ formatBytes(video.sizeBytes) }}</strong>
+        </div>
+        <div class="info-row">
+          <span>上传者</span>
+          <strong>{{ video.uploader.email }}</strong>
+        </div>
+        <div class="info-row">
+          <span>创建时间</span>
+          <strong>{{ new Date(video.createdAt).toLocaleString() }}</strong>
+        </div>
+        <div class="info-row">
+          <span>更新时间</span>
+          <strong>{{ new Date(video.updatedAt).toLocaleString() }}</strong>
+        </div>
+        <div class="info-row full">
+          <span>OSS Key</span>
+          <strong class="mono">{{ video.ossKey }}</strong>
+        </div>
       </div>
     </div>
   </section>
@@ -110,32 +153,54 @@ h2 {
   text-decoration: none;
 }
 
-.detail-grid {
+.detail-layout {
+  display: grid;
+  gap: 16px;
+}
+
+.player-card,
+.info-card {
+  padding: 18px;
+  border-radius: 22px;
+  background: #f8fbff;
+}
+
+.player-card {
+  display: grid;
+  gap: 12px;
+}
+
+.player {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  display: block;
+  border-radius: 18px;
+  background: #0f172a;
+}
+
+.info-card {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
 }
 
-.detail-card {
+.info-row {
   display: grid;
   gap: 8px;
-  padding: 16px;
-  border-radius: 18px;
-  background: #f8fbff;
 }
 
-.detail-card span {
+.info-row span {
   font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: #486581;
 }
 
-.detail-card strong {
+.info-row strong {
   color: #102a43;
 }
 
-.detail-card.full {
+.info-row.full {
   grid-column: 1 / -1;
 }
 
@@ -153,7 +218,8 @@ h2 {
 }
 
 @media (max-width: 720px) {
-  .detail-grid {
+  .page-head,
+  .info-card {
     grid-template-columns: 1fr;
   }
 }

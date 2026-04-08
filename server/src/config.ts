@@ -35,6 +35,8 @@ const schema = z.object({
   APP_BASE_URL: z.string().url().default("http://localhost:3000"),
   PASSWORD_RESET_WINDOW_MINUTES: z.coerce.number().int().positive().default(15),
   PASSWORD_RESET_MAX_REQUESTS_PER_HOUR: z.coerce.number().int().positive().default(5),
+  VIDEO_DELETE_RETENTION_MINUTES: z.coerce.number().int().positive().default(10),
+  VIDEO_DELETE_CLEANUP_INTERVAL_MINUTES: z.coerce.number().int().positive().default(5),
   OSS_REGION: z.string().min(1).default("oss-cn-shanghai"),
   OSS_BUCKET: z.string().min(1).default("videofly-dev"),
   OSS_ENDPOINT: z.preprocess(normalizeUrl, z.string().url()).default("https://oss-cn-shanghai.aliyuncs.com"),

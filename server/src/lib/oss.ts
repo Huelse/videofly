@@ -6,6 +6,7 @@ import OSS from "ali-oss";
 import { config } from "../config.js";
 
 const SIGNED_URL_EXPIRES_IN_SECONDS = 15 * 60;
+const SIGNED_READ_URL_EXPIRES_IN_SECONDS = 12 * 60 * 60;
 
 function toClientObjectKey(objectKey: string) {
   return objectKey.replace(/^\/+/, "");
@@ -64,6 +65,32 @@ export async function getSignedUploadPartUrl(objectKey: string, ossUploadId: str
   };
 }
 
+export async function getSignedReadUrl(objectKey: string, expiresInSeconds = SIGNED_READ_URL_EXPIRES_IN_SECONDS) {
+  const client = createClient(config.OSS_PUBLIC_ENDPOINT ?? config.OSS_ENDPOINT);
+  const url = await client.signatureUrlV4("GET", expiresInSeconds, {}, toClientObjectKey(objectKey));
+
+  return {
+    url,
+    expiresInSeconds,
+    method: "GET" as const
+  };
+}
+
+export async function getObjectStream(objectKey: string, range?: string) {
+  const client = createClient();
+
+  return client.getStream(
+    toClientObjectKey(objectKey),
+    range
+      ? {
+          headers: {
+            Range: range
+          }
+        }
+      : {}
+  );
+}
+
 export async function uploadMultipartPart(objectKey: string, ossUploadId: string, partNumber: number, chunk: Buffer) {
   const client = createClient();
   const result = await client.uploadPart(
@@ -88,4 +115,10 @@ export async function abortMultipartUpload(objectKey: string, ossUploadId: strin
   const client = createClient();
 
   return client.abortMultipartUpload(toClientObjectKey(objectKey), ossUploadId);
+}
+
+export async function deleteObject(objectKey: string) {
+  const client = createClient();
+
+  return client.delete(toClientObjectKey(objectKey));
 }

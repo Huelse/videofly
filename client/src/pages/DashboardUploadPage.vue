@@ -10,6 +10,7 @@ import { authStore } from "../stores/auth";
 const router = useRouter();
 const PARALLEL_UPLOAD_WORKERS = 4;
 const PART_UPLOAD_RETRY_COUNT = 3;
+const PART_UPLOAD_TIMEOUT_MS = 90_000;
 const MAX_VALIDATION_REUPLOAD_PASSES = 2;
 const form = reactive({
   title: "",
@@ -34,7 +35,6 @@ const uploadRuntimeState = ref<"idle" | "uploading" | "paused">("idle");
 const loading = reactive({
   init: false,
   part: false,
-  status: false,
   complete: false,
   cancel: false,
   history: false
@@ -91,6 +91,7 @@ const canUploadParts = computed(() => {
     uploadSession.value?.status !== "CANCELED" &&
     uploadSession.value?.status !== "COMPLETED" &&
     !loading.part &&
+    !loading.complete &&
     !loading.cancel
   );
 });
@@ -99,25 +100,8 @@ const canPause = computed(() => {
   return uploadRuntimeState.value === "uploading" && !loading.cancel;
 });
 
-const canComplete = computed(() => {
-  if (!uploadSession.value || loading.complete) {
-    return false;
-  }
-
-  return (
-    uploadRuntimeState.value === "idle" &&
-    progress.value === 100 &&
-    uploadSession.value.status !== "COMPLETED" &&
-    uploadSession.value.status !== "CANCELED"
-  );
-});
-
-const canRefresh = computed(() => {
-  return Boolean(uploadSession.value) && uploadRuntimeState.value === "idle" && !loading.status;
-});
-
 const canCancel = computed(() => {
-  if (!uploadSession.value || loading.cancel) {
+  if (!uploadSession.value || loading.cancel || loading.complete) {
     return false;
   }
 
@@ -131,6 +115,32 @@ function isSessionReadyToComplete(session: UploadSessionState | null) {
 
   const totalParts = session.totalParts ?? Math.ceil(Number(session.fileSizeBytes ?? 0) / session.partSizeBytes);
   return totalParts > 0 && (session.uploadedParts?.length ?? 0) >= totalParts;
+}
+
+function mergeUploadSessionState(current: UploadSessionState | null, incoming: UploadSessionState) {
+  if (!current || current.uploadId !== incoming.uploadId) {
+    return incoming;
+  }
+
+  const uploadedParts = Array.from(new Set([...(current.uploadedParts ?? []), ...(incoming.uploadedParts ?? [])])).sort(
+    (left, right) => left - right
+  );
+  const uploadedPartDetails = new Map<number, { number: number; checksum: string }>();
+
+  for (const detail of current.uploadedPartDetails ?? []) {
+    uploadedPartDetails.set(detail.number, detail);
+  }
+
+  for (const detail of incoming.uploadedPartDetails ?? []) {
+    uploadedPartDetails.set(detail.number, detail);
+  }
+
+  return {
+    ...current,
+    ...incoming,
+    uploadedParts,
+    uploadedPartDetails: Array.from(uploadedPartDetails.values()).sort((left, right) => left.number - right.number)
+  };
 }
 
 const workflowSteps = computed(() => {
@@ -328,6 +338,9 @@ async function uploadSelectedFile() {
         })
       );
 
+      uploadSession.value = await fetchLatestUploadSession(uploadSession.value.uploadId);
+      syncProgressFromSession(uploadSession.value);
+
       if (cancelRequested.value) {
         uploadRuntimeState.value = "idle";
         message.value = "上传已中止";
@@ -398,8 +411,12 @@ async function uploadSinglePart(file: File, uploadId: string, partSizeBytes: num
     return;
   }
 
-  uploadSession.value = session;
+  uploadSession.value = mergeUploadSessionState(uploadSession.value, session);
   progress.value = Math.round(((uploadSession.value.uploadedParts?.length ?? 0) / totalParts) * 100);
+}
+
+async function fetchLatestUploadSession(uploadId: string) {
+  return await apiRequest<UploadSessionState>(`/upload/status/${uploadId}`, {}, authStore.token.value);
 }
 
 async function uploadChunkInWorker(uploadId: string, chunk: Blob, partNumber: number, contentType: string) {
@@ -442,60 +459,10 @@ async function uploadChunkInWorker(uploadId: string, chunk: Blob, partNumber: nu
       url: `${apiBaseUrl}/upload/part/upload?uploadId=${encodeURIComponent(uploadId)}&partNumber=${partNumber}`,
       token: authStore.token.value ?? "",
       contentType,
-      maxAttempts: PART_UPLOAD_RETRY_COUNT
+      maxAttempts: PART_UPLOAD_RETRY_COUNT,
+      timeoutMs: PART_UPLOAD_TIMEOUT_MS
     });
   });
-}
-
-async function refreshStatus() {
-  if (!uploadSession.value) {
-    return;
-  }
-
-  loading.status = true;
-  try {
-    uploadSession.value = await apiRequest<UploadSessionState>(
-      `/upload/status/${uploadSession.value.uploadId}`,
-      {},
-      authStore.token.value
-    );
-    syncProgressFromSession(uploadSession.value);
-  } catch (error) {
-    message.value = error instanceof Error ? error.message : "状态获取失败";
-  } finally {
-    loading.status = false;
-  }
-}
-
-async function completeUpload() {
-  if (!uploadSession.value) {
-    return;
-  }
-
-  loading.complete = true;
-  try {
-    if (selectedFile.value) {
-      const invalidPartNumbers = await findInvalidUploadedParts(selectedFile.value, uploadSession.value);
-
-      if (invalidPartNumbers.length > 0) {
-        const invalidSet = new Set(invalidPartNumbers);
-        uploadSession.value = {
-          ...uploadSession.value,
-          uploadedParts: (uploadSession.value.uploadedParts ?? []).filter((partNumber) => !invalidSet.has(partNumber)),
-          uploadedPartDetails: (uploadSession.value.uploadedPartDetails ?? []).filter((part) => !invalidSet.has(part.number))
-        };
-        syncProgressFromSession(uploadSession.value);
-        message.value = `检测到 ${invalidPartNumbers.length} 个异常分片，请点击继续上传进行重传`;
-        return;
-      }
-    }
-
-    await finalizeUploadSession(uploadSession.value.uploadId, true);
-  } catch (error) {
-    message.value = error instanceof Error ? error.message : "上传完成失败";
-  } finally {
-    loading.complete = false;
-  }
 }
 
 async function cancelUpload() {
@@ -740,28 +707,41 @@ async function continueHistoryUpload(item: UploadHistoryItem) {
 }
 
 async function finalizeUploadSession(uploadId: string, redirectToVideo = false) {
-  const completedVideo = await apiRequest<{ id: string }>(
-    "/upload/complete",
-    {
-      method: "POST",
-      body: JSON.stringify({ uploadId })
-    },
-    authStore.token.value
-  );
-
-  if (uploadSession.value?.uploadId === uploadId) {
-    uploadSession.value = {
-      ...uploadSession.value,
-      status: "COMPLETED"
-    };
-    syncProgressFromSession(uploadSession.value);
+  if (loading.complete) {
+    return;
   }
 
-  await fetchUploadHistory();
-  message.value = "上传已完成并已入库";
+  loading.complete = true;
 
-  if (redirectToVideo) {
-    await router.push(`/dashboard/videos/${completedVideo.id}`);
+  try {
+    uploadSession.value = mergeUploadSessionState(uploadSession.value, await fetchLatestUploadSession(uploadId));
+    syncProgressFromSession(uploadSession.value);
+
+    const completedVideo = await apiRequest<{ id: string }>(
+      "/upload/complete",
+      {
+        method: "POST",
+        body: JSON.stringify({ uploadId })
+      },
+      authStore.token.value
+    );
+
+    if (uploadSession.value?.uploadId === uploadId) {
+      uploadSession.value = {
+        ...uploadSession.value,
+        status: "COMPLETED"
+      };
+      syncProgressFromSession(uploadSession.value);
+    }
+
+    await fetchUploadHistory();
+    message.value = "上传已完成并已入库";
+
+    if (redirectToVideo) {
+      await router.push(`/dashboard/videos/${completedVideo.id}`);
+    }
+  } finally {
+    loading.complete = false;
   }
 }
 
@@ -861,12 +841,6 @@ function formatDuration(totalSeconds: number) {
       </button>
       <button class="ghost-button" :disabled="!canPause" @click="pauseUpload">
         暂停上传
-      </button>
-      <button class="ghost-button" :disabled="!canRefresh" @click="refreshStatus">
-        {{ loading.status ? "刷新中..." : "刷新状态" }}
-      </button>
-      <button class="ghost-button" :disabled="!canComplete" @click="completeUpload">
-        {{ loading.complete ? "步骤 3 完成中..." : "步骤 3 完成上传" }}
       </button>
       <button class="danger-button" :disabled="!canCancel" @click="cancelUpload">
         {{ loading.cancel ? "取消中..." : "取消上传" }}
@@ -996,16 +970,16 @@ function formatDuration(totalSeconds: number) {
               v-if="item.status !== 'COMPLETED' && item.status !== 'CANCELED'"
               class="ghost-button"
               type="button"
-              :disabled="uploadRuntimeState === 'uploading' || loading.cancel"
+              :disabled="uploadRuntimeState === 'uploading' || loading.cancel || loading.complete"
               @click="continueHistoryUpload(item)"
             >
-              {{ isSessionReadyToComplete(item) ? "完成上传" : "继续上传" }}
+              继续上传
             </button>
             <button
               v-if="item.status !== 'COMPLETED' && item.status !== 'CANCELED'"
               class="danger-button"
               type="button"
-              :disabled="uploadRuntimeState === 'uploading' || loading.cancel"
+              :disabled="uploadRuntimeState === 'uploading' || loading.cancel || loading.complete"
               @click="cancelHistoryUpload(item)"
             >
               取消

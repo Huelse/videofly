@@ -55,6 +55,7 @@ export type VideoItem = {
   status: string;
   sizeBytes: string;
   createdAt: string;
+  playbackUrl?: string;
   uploader: {
     email: string;
   };
@@ -64,6 +65,7 @@ export type VideoDetail = VideoItem & {
   ossKey: string;
   updatedAt: string;
   uploaderId: string;
+  deletedAt?: string | null;
 };
 
 export async function apiRequest<T>(path: string, init: RequestInit = {}, token?: string) {
