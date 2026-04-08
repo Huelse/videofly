@@ -28,9 +28,20 @@ export type UploadedOssPart = {
   etag: string;
 };
 
-export function buildOssObjectKey(filename: string) {
-  const extension = path.extname(filename).toLowerCase() || ".mp4";
-  const filenameHash = crypto.createHash("sha256").update(filename).digest("hex");
+export function buildStoredFilename(preferredName: string, originalFilename: string) {
+  const normalizedPreferredName = preferredName.trim();
+  const normalizedOriginalFilename = originalFilename.trim();
+  const preferredExtension = path.extname(normalizedPreferredName);
+  const originalExtension = path.extname(normalizedOriginalFilename).toLowerCase() || ".mp4";
+  const storedFilename = preferredExtension ? normalizedPreferredName : `${normalizedPreferredName}${originalExtension}`;
+
+  return storedFilename.replace(/[\\/]+/g, "-");
+}
+
+export function buildOssObjectKey(preferredName: string, originalFilename = preferredName) {
+  const storedFilename = buildStoredFilename(preferredName, originalFilename);
+  const extension = path.extname(storedFilename).toLowerCase() || ".mp4";
+  const filenameHash = crypto.createHash("sha256").update(storedFilename).digest("hex");
 
   return `/upload/${filenameHash}${extension}`;
 }

@@ -161,7 +161,7 @@ describe("upload integration", () => {
       .expect(409);
 
     expect(response.body.message).toBe("Upload quota exceeded. Remaining quota is 124 bytes");
-    expect(oss.abortMultipartUpload).toHaveBeenCalledWith(buildOssObjectKey("too-large.mp4"), "oss-upload-id");
+    expect(oss.abortMultipartUpload).toHaveBeenCalledWith(buildOssObjectKey("Too large", "too-large.mp4"), "oss-upload-id");
   });
 
   it("completes upload successfully when a soft-deleted video exists for the same filename", async () => {
@@ -219,6 +219,42 @@ describe("upload integration", () => {
     expect(videos).toHaveLength(1);
     expect(videos[0].status).toBe(VideoStatus.READY);
     expect(videos[0].deletedAt).toBeNull();
+  });
+
+  it("uses the custom title as the primary stored filename key", async () => {
+    const uploader = await createUser("uploader-custom-title@example.com", Role.UPLOADER);
+
+    await prisma.video.create({
+      data: {
+        title: "Existing custom title",
+        ossKey: buildOssObjectKey("My custom title", "origin-a.mp4"),
+        sizeBytes: 2048n,
+        status: VideoStatus.READY,
+        uploaderId: uploader.id
+      }
+    });
+
+    await request(app)
+      .post("/api/v1/upload/init")
+      .set("Authorization", createAuthHeader(uploader))
+      .send({
+        title: "Another custom title",
+        filename: "origin-a.mp4",
+        mimeType: "video/mp4",
+        fileSizeBytes: "1024"
+      })
+      .expect(201);
+
+    await request(app)
+      .post("/api/v1/upload/init")
+      .set("Authorization", createAuthHeader(uploader))
+      .send({
+        title: "My custom title",
+        filename: "origin-b.mp4",
+        mimeType: "video/mp4",
+        fileSizeBytes: "1024"
+      })
+      .expect(409);
   });
 
   it("recovers completion when oss multipart has already been finalized", async () => {

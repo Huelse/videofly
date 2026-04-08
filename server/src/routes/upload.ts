@@ -33,8 +33,8 @@ const UPLOAD_SESSION_STATUS = {
 } as const;
 
 const initUploadSchema = z.object({
-  title: z.string().min(1).max(200),
-  filename: z.string().min(1).max(255),
+  title: z.string().trim().min(1).max(200),
+  filename: z.string().trim().min(1).max(255),
   mimeType: z.string().min(1),
   fileSizeBytes: z.coerce.bigint().positive()
 });
@@ -158,7 +158,7 @@ uploadRouter.post("/init", async (req, res, next) => {
 
     const uploadId = crypto.randomUUID();
     const filename = input.filename;
-    const ossKey = buildOssObjectKey(input.filename);
+    const ossKey = buildOssObjectKey(input.title, input.filename);
     const ossUploadId = await initMultipartUpload(ossKey, input.mimeType);
     pendingMultipartUpload = { ossKey, ossUploadId };
 

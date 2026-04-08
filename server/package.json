@@ -10,6 +10,7 @@
     "lint": "tsc --noEmit",
     "test": "pnpm test:integration",
     "test:integration": "prisma generate && DATABASE_URL=$(node scripts/test-db-url.mjs) prisma db push --skip-generate && DATABASE_URL=$(node scripts/test-db-url.mjs) vitest run --config vitest.config.ts",
+    "openapi:generate": "tsx scripts/generate-openapi.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "tsx prisma/seed.ts"
