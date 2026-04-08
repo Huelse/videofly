@@ -1,35 +1,25 @@
+import crypto from "node:crypto";
+import path from "node:path";
+
 import OSS from "ali-oss";
 
 import { config } from "../config.js";
 
 const SIGNED_URL_EXPIRES_IN_SECONDS = 15 * 60;
 
-type OssPart = {
-  PartNumber?: number | string;
-  ETag?: string;
-};
+function toClientObjectKey(objectKey: string) {
+  return objectKey.replace(/^\/+/, "");
+}
 
-function createClient() {
+function createClient(endpoint = config.OSS_ENDPOINT) {
   return new OSS({
     region: config.OSS_REGION,
     bucket: config.OSS_BUCKET,
-    endpoint: config.OSS_ENDPOINT,
+    endpoint,
     accessKeyId: config.OSS_ACCESS_KEY_ID,
     accessKeySecret: config.OSS_ACCESS_KEY_SECRET,
     authorizationV4: true
   });
-}
-
-function sanitizeFilename(filename: string) {
-  return filename.replace(/[^a-zA-Z0-9._-]/g, "-");
-}
-
-function normalizePartNumberMarker(marker: unknown) {
-  if (marker === undefined || marker === null || marker === "") {
-    return undefined;
-  }
-
-  return Number(marker);
 }
 
 export type UploadedOssPart = {
@@ -37,13 +27,16 @@ export type UploadedOssPart = {
   etag: string;
 };
 
-export function buildOssObjectKey(userId: string, uploadId: string, filename: string) {
-  return `videos/${userId}/${uploadId}/${sanitizeFilename(filename)}`;
+export function buildOssObjectKey(filename: string) {
+  const extension = path.extname(filename).toLowerCase() || ".mp4";
+  const filenameHash = crypto.createHash("sha256").update(filename).digest("hex");
+
+  return `/upload/${filenameHash}${extension}`;
 }
 
 export async function initMultipartUpload(objectKey: string, mimeType: string) {
   const client = createClient();
-  const result = await client.initMultipartUpload(objectKey, {
+  const result = await client.initMultipartUpload(toClientObjectKey(objectKey), {
     mime: mimeType
   });
 
@@ -51,7 +44,7 @@ export async function initMultipartUpload(objectKey: string, mimeType: string) {
 }
 
 export async function getSignedUploadPartUrl(objectKey: string, ossUploadId: string, partNumber: number) {
-  const client = createClient();
+  const client = createClient(config.OSS_PUBLIC_ENDPOINT ?? config.OSS_ENDPOINT);
   const url = await client.signatureUrlV4(
     "PUT",
     SIGNED_URL_EXPIRES_IN_SECONDS,
@@ -61,7 +54,7 @@ export async function getSignedUploadPartUrl(objectKey: string, ossUploadId: str
         uploadId: ossUploadId
       }
     },
-    objectKey
+    toClientObjectKey(objectKey)
   );
 
   return {
@@ -71,51 +64,28 @@ export async function getSignedUploadPartUrl(objectKey: string, ossUploadId: str
   };
 }
 
-export async function listUploadedParts(objectKey: string, ossUploadId: string) {
+export async function uploadMultipartPart(objectKey: string, ossUploadId: string, partNumber: number, chunk: Buffer) {
   const client = createClient();
-  const uploadedParts: UploadedOssPart[] = [];
-  let marker: number | undefined;
+  const result = await client.uploadPart(
+    toClientObjectKey(objectKey),
+    ossUploadId,
+    partNumber,
+    chunk,
+    0,
+    chunk.length
+  );
 
-  do {
-    const result = await client.listParts(
-      objectKey,
-      ossUploadId,
-      marker
-        ? {
-            "part-number-marker": marker
-          }
-        : {}
-    );
-
-    const parts = (Array.isArray(result.parts) ? result.parts : []) as OssPart[];
-
-    uploadedParts.push(
-      ...parts
-        .map((part) => {
-          const typedPart = part as OssPart;
-
-          return {
-            number: Number(typedPart.PartNumber),
-            etag: typedPart.ETag ?? ""
-          };
-        })
-        .filter((part: UploadedOssPart) => Number.isInteger(part.number) && part.number > 0 && part.etag)
-    );
-
-    marker = normalizePartNumberMarker(result.nextPartNumberMarker);
-  } while (marker);
-
-  return uploadedParts.sort((a, b) => a.number - b.number);
+  return (result.res.headers.etag as string | undefined)?.replaceAll('"', "").trim() ?? "";
 }
 
 export async function completeMultipartUpload(objectKey: string, ossUploadId: string, parts: UploadedOssPart[]) {
   const client = createClient();
 
-  return client.completeMultipartUpload(objectKey, ossUploadId, parts);
+  return client.completeMultipartUpload(toClientObjectKey(objectKey), ossUploadId, parts);
 }
 
 export async function abortMultipartUpload(objectKey: string, ossUploadId: string) {
   const client = createClient();
 
-  return client.abortMultipartUpload(objectKey, ossUploadId);
+  return client.abortMultipartUpload(toClientObjectKey(objectKey), ossUploadId);
 }

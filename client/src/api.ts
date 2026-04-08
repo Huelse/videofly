@@ -35,15 +35,19 @@ export type UploadSessionState = {
   partSizeBytes: number;
   uploadedParts?: number[];
   fileSizeBytes?: string;
+  uploadedPartDetails?: Array<{
+    number: number;
+    checksum: string;
+  }>;
+  totalParts?: number;
+  title?: string;
+  filename?: string;
+  mimeType?: string;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
-export type UploadPartTicket = {
-  uploadId: string;
-  status: string;
-  url: string;
-  method: "PUT";
-  expiresInSeconds: number;
-};
+export type UploadHistoryItem = UploadSessionState;
 
 export type VideoItem = {
   id: string;

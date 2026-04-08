@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import type { UploadFile, UploadFiles, UploadRawFile } from "element-plus";
-import { computed, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 
-import type { UploadPartTicket, UploadSessionState } from "../api";
-import { apiRequest } from "../api";
+import type { UploadHistoryItem, UploadSessionState } from "../api";
+import { apiBaseUrl, apiRequest } from "../api";
 import { authStore } from "../stores/auth";
 
 const router = useRouter();
+const PARALLEL_UPLOAD_WORKERS = 4;
+const PART_UPLOAD_RETRY_COUNT = 3;
+const MAX_VALIDATION_REUPLOAD_PASSES = 2;
 const form = reactive({
   title: "",
   filename: "",
@@ -21,22 +24,32 @@ const selectedFiles = ref<UploadFile[]>([]);
 const message = ref("");
 const progress = ref(0);
 const cancelRequested = ref(false);
+const pauseRequested = ref(false);
 const durationSeconds = ref<number | null>(null);
+const videoPreviewUrl = ref<string>("");
 const videoPosterDataUrl = ref<string>("");
+const uploadHistory = ref<UploadHistoryItem[]>([]);
+const uploadRuntimeState = ref<"idle" | "uploading" | "paused">("idle");
 const loading = reactive({
   init: false,
   part: false,
   status: false,
   complete: false,
-  cancel: false
+  cancel: false,
+  history: false
 });
+const activeWorkers = new Set<Worker>();
+const selectedFilePartChecksumCache = new Map<number, string>();
+
+const isUploading = computed(() => uploadRuntimeState.value === "uploading");
+const isPaused = computed(() => uploadRuntimeState.value === "paused");
 
 const partCount = computed(() => {
-  if (!selectedFile.value || !uploadSession.value?.partSizeBytes) {
-    return 0;
+  if (selectedFile.value && uploadSession.value?.partSizeBytes) {
+    return Math.ceil(selectedFile.value.size / uploadSession.value.partSizeBytes);
   }
 
-  return Math.ceil(selectedFile.value.size / uploadSession.value.partSizeBytes);
+  return uploadSession.value?.totalParts ?? 0;
 });
 
 const formattedFileSize = computed(() => {
@@ -56,15 +69,33 @@ const formattedDuration = computed(() => {
 });
 
 const canInitialize = computed(() => {
-  return authStore.canUpload.value && Boolean(selectedFile.value) && !loading.init;
+  return (
+    authStore.canUpload.value &&
+    Boolean(selectedFile.value) &&
+    !loading.init &&
+    uploadRuntimeState.value === "idle" &&
+    (!uploadSession.value || uploadSession.value.status === "COMPLETED" || uploadSession.value.status === "CANCELED")
+  );
 });
 
 const isUploadLocked = computed(() => {
-  return loading.init || loading.part || loading.complete || loading.cancel || uploadSession.value?.status === "COMPLETED";
+  return uploadRuntimeState.value !== "idle" || loading.init || loading.complete || loading.cancel;
 });
 
 const canUploadParts = computed(() => {
-  return Boolean(uploadSession.value) && uploadSession.value?.status !== "CANCELED" && !loading.part;
+  return (
+    Boolean(uploadSession.value) &&
+    Boolean(selectedFile.value) &&
+    uploadRuntimeState.value !== "uploading" &&
+    uploadSession.value?.status !== "CANCELED" &&
+    uploadSession.value?.status !== "COMPLETED" &&
+    !loading.part &&
+    !loading.cancel
+  );
+});
+
+const canPause = computed(() => {
+  return uploadRuntimeState.value === "uploading" && !loading.cancel;
 });
 
 const canComplete = computed(() => {
@@ -72,11 +103,16 @@ const canComplete = computed(() => {
     return false;
   }
 
-  return progress.value === 100 && uploadSession.value.status !== "COMPLETED" && uploadSession.value.status !== "CANCELED";
+  return (
+    uploadRuntimeState.value === "idle" &&
+    progress.value === 100 &&
+    uploadSession.value.status !== "COMPLETED" &&
+    uploadSession.value.status !== "CANCELED"
+  );
 });
 
 const canRefresh = computed(() => {
-  return Boolean(uploadSession.value) && !loading.status;
+  return Boolean(uploadSession.value) && uploadRuntimeState.value === "idle" && !loading.status;
 });
 
 const canCancel = computed(() => {
@@ -130,16 +166,25 @@ async function handleFileChange(uploadFile: UploadFile, uploadFiles: UploadFiles
   }
 
   const file = rawFile as File;
+  resetChecksumCache();
+  resetPreviewUrl();
   selectedFile.value = file;
   form.filename = file.name;
   form.mimeType = file.type || "video/mp4";
   form.fileSizeBytes = file.size;
   form.title = file.name.replace(/\.[^/.]+$/, "");
+  videoPreviewUrl.value = URL.createObjectURL(file);
   durationSeconds.value = await readVideoDuration(file);
   videoPosterDataUrl.value = (await readVideoPoster(file)) ?? "";
   progress.value = 0;
-  uploadSession.value = null;
   cancelRequested.value = false;
+  pauseRequested.value = false;
+  uploadRuntimeState.value = "idle";
+
+  if (uploadSession.value && !matchesSelectedFile(uploadSession.value)) {
+    uploadSession.value = null;
+  }
+
   message.value = "文件已就绪，请确认名称后初始化上传";
 }
 
@@ -161,6 +206,8 @@ function clearSelection() {
   selectedFile.value = null;
   selectedFiles.value = [];
   durationSeconds.value = null;
+  resetChecksumCache();
+  resetPreviewUrl();
   videoPosterDataUrl.value = "";
   form.title = "";
   form.filename = "";
@@ -169,6 +216,8 @@ function clearSelection() {
   progress.value = 0;
   uploadSession.value = null;
   cancelRequested.value = false;
+  pauseRequested.value = false;
+  uploadRuntimeState.value = "idle";
 }
 
 async function initializeUpload() {
@@ -189,6 +238,8 @@ async function initializeUpload() {
       },
       authStore.token.value
     );
+    syncProgressFromSession(uploadSession.value);
+    await fetchUploadHistory();
     message.value = `上传会话已创建：${uploadSession.value.uploadId}`;
   } catch (error) {
     message.value = error instanceof Error ? error.message : "上传初始化失败";
@@ -204,80 +255,178 @@ async function uploadSelectedFile() {
 
   loading.part = true;
   cancelRequested.value = false;
+  pauseRequested.value = false;
+  uploadRuntimeState.value = "uploading";
+  message.value = "";
 
   try {
-    const totalParts = Math.ceil(selectedFile.value.size / uploadSession.value.partSizeBytes);
+    const file = selectedFile.value;
+    let validationPass = 0;
+    let pendingPartNumbers: number[] = [];
+    let totalParts = 0;
 
-    for (let index = 0; index < totalParts; index += 1) {
-      if (cancelRequested.value) {
-        message.value = "上传已中止";
+    do {
+      const session: UploadSessionState | null = uploadSession.value;
+      if (!session) {
+        throw new Error("Upload session not found");
+      }
+
+      totalParts = Math.ceil(file.size / session.partSizeBytes);
+      const invalidPartNumbers = await findInvalidUploadedParts(file, session);
+
+      if (invalidPartNumbers.length > 0) {
+        const invalidSet = new Set(invalidPartNumbers);
+        uploadSession.value = {
+          ...session,
+          uploadedParts: (session.uploadedParts ?? []).filter((partNumber: number) => !invalidSet.has(partNumber)),
+          uploadedPartDetails: (session.uploadedPartDetails ?? []).filter((part: { number: number; checksum: string }) => !invalidSet.has(part.number))
+        };
+        syncProgressFromSession(uploadSession.value);
+        message.value = `检测到 ${invalidPartNumbers.length} 个异常分片，正在按分片重传`;
+      }
+
+      const currentSession = uploadSession.value;
+      if (!currentSession) {
+        throw new Error("Upload session not found");
+      }
+
+      const completedParts = new Set<number>(currentSession.uploadedParts ?? []);
+      pendingPartNumbers = Array.from({ length: totalParts }, (_, index) => index + 1).filter(
+        (partNumber) => !completedParts.has(partNumber)
+      );
+
+      if (pendingPartNumbers.length === 0) {
         break;
       }
 
-      const partNumber = index + 1;
-      const start = index * uploadSession.value.partSizeBytes;
-      const end = Math.min(start + uploadSession.value.partSizeBytes, selectedFile.value.size);
-      const chunk = selectedFile.value.slice(start, end);
+      let queueIndex = 0;
+      const runnerCount = Math.min(PARALLEL_UPLOAD_WORKERS, pendingPartNumbers.length);
 
-      const ticket = await apiRequest<UploadPartTicket>(
-        "/upload/part",
-        {
-          method: "POST",
-          body: JSON.stringify({ uploadId: uploadSession.value.uploadId, partNumber })
-        },
-        authStore.token.value
+      await Promise.all(
+        Array.from({ length: runnerCount }, async () => {
+          while (!cancelRequested.value && !pauseRequested.value) {
+            const partNumber = pendingPartNumbers[queueIndex];
+            queueIndex += 1;
+
+            if (!partNumber) {
+              return;
+            }
+
+            await uploadSinglePart(file, uploadSession.value!.uploadId, uploadSession.value!.partSizeBytes, partNumber, totalParts);
+          }
+        })
       );
 
-      await uploadChunkWithRetry(ticket, chunk);
-      uploadSession.value.status = ticket.status;
-      uploadSession.value.uploadedParts = [...new Set([...(uploadSession.value.uploadedParts ?? []), partNumber])].sort(
-        (a, b) => a - b
-      );
+      if (cancelRequested.value) {
+        uploadRuntimeState.value = "idle";
+        message.value = "上传已中止";
+        await fetchUploadHistory();
+        return;
+      }
 
-      progress.value = Math.round((partNumber / totalParts) * 100);
+      if (pauseRequested.value) {
+        uploadRuntimeState.value = "paused";
+        message.value = "上传已暂停，可继续上传";
+        await fetchUploadHistory();
+        return;
+      }
+
+      validationPass += 1;
+    } while (pendingPartNumbers.length > 0 && validationPass <= MAX_VALIDATION_REUPLOAD_PASSES);
+
+    if (uploadSession.value) {
+      const invalidPartNumbers = await findInvalidUploadedParts(file, uploadSession.value);
+
+      if (invalidPartNumbers.length > 0) {
+        const invalidSet = new Set(invalidPartNumbers);
+        uploadSession.value = {
+          ...uploadSession.value,
+          uploadedParts: (uploadSession.value.uploadedParts ?? []).filter((partNumber) => !invalidSet.has(partNumber)),
+          uploadedPartDetails: (uploadSession.value.uploadedPartDetails ?? []).filter((part) => !invalidSet.has(part.number))
+        };
+        uploadRuntimeState.value = "idle";
+        syncProgressFromSession(uploadSession.value);
+        message.value = `仍有 ${invalidPartNumbers.length} 个分片校验失败，请继续上传重传`;
+        await fetchUploadHistory();
+        return;
+      }
     }
 
-    if (!cancelRequested.value) {
-      message.value = `已完成 ${totalParts} 个分片上传`;
-    }
+    uploadRuntimeState.value = "idle";
+    syncProgressFromSession(uploadSession.value);
+    message.value = `已完成 ${totalParts} 个分片上传`;
+    await fetchUploadHistory();
   } catch (error) {
+    uploadRuntimeState.value = "idle";
     message.value = error instanceof Error ? error.message : "分片上传失败";
   } finally {
+    terminateActiveWorkers();
     loading.part = false;
   }
 }
 
-async function uploadChunkWithRetry(ticket: UploadPartTicket, chunk: Blob, maxAttempts = 3) {
-  let lastError: Error | null = null;
+async function uploadSinglePart(file: File, uploadId: string, partSizeBytes: number, partNumber: number, totalParts: number) {
+  const start = (partNumber - 1) * partSizeBytes;
+  const end = Math.min(start + partSizeBytes, file.size);
+  const chunk = file.slice(start, end, file.type || "application/octet-stream");
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    try {
-      const response = await fetch(ticket.url, {
-        method: ticket.method,
-        body: chunk,
-        headers: {
-          "Content-Type": selectedFile.value?.type || "application/octet-stream"
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error(`OSS upload failed with status ${response.status}`);
-      }
-
-      return;
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error("OSS upload failed");
-
-      if (attempt === maxAttempts) {
-        break;
-      }
-
-      const delay = 500 * 2 ** (attempt - 1);
-      await new Promise((resolve) => window.setTimeout(resolve, delay));
-    }
+  if (cancelRequested.value) {
+    return;
   }
 
-  throw lastError ?? new Error("OSS upload failed");
+  const session = await uploadChunkInWorker(uploadId, chunk, partNumber, file.type || "application/octet-stream");
+
+  if (cancelRequested.value) {
+    return;
+  }
+
+  uploadSession.value = session;
+  progress.value = Math.round(((uploadSession.value.uploadedParts?.length ?? 0) / totalParts) * 100);
+}
+
+async function uploadChunkInWorker(uploadId: string, chunk: Blob, partNumber: number, contentType: string) {
+  return await new Promise<UploadSessionState>((resolve, reject) => {
+    const worker = new Worker(new URL("../workers/upload-part.worker.ts", import.meta.url), {
+      type: "module"
+    });
+
+    activeWorkers.add(worker);
+
+    const cleanup = () => {
+      activeWorkers.delete(worker);
+      worker.terminate();
+    };
+
+    worker.onmessage = (
+      event: MessageEvent<{ type: string; partNumber: number; session?: UploadSessionState; message?: string }>
+    ) => {
+      const payload = event.data;
+      cleanup();
+
+      if (payload.type === "success" && payload.session) {
+        resolve(payload.session);
+        return;
+      }
+
+      reject(new Error(payload.message ?? `Part ${partNumber} upload failed`));
+    };
+
+    worker.onerror = () => {
+      cleanup();
+      reject(new Error(`Part ${partNumber} worker failed`));
+    };
+
+    worker.postMessage({
+      type: "upload",
+      partNumber,
+      chunk,
+      method: "PUT",
+      url: `${apiBaseUrl}/upload/part/upload?uploadId=${encodeURIComponent(uploadId)}&partNumber=${partNumber}`,
+      token: authStore.token.value ?? "",
+      contentType,
+      maxAttempts: PART_UPLOAD_RETRY_COUNT
+    });
+  });
 }
 
 async function refreshStatus() {
@@ -292,6 +441,7 @@ async function refreshStatus() {
       {},
       authStore.token.value
     );
+    syncProgressFromSession(uploadSession.value);
   } catch (error) {
     message.value = error instanceof Error ? error.message : "状态获取失败";
   } finally {
@@ -306,6 +456,22 @@ async function completeUpload() {
 
   loading.complete = true;
   try {
+    if (selectedFile.value) {
+      const invalidPartNumbers = await findInvalidUploadedParts(selectedFile.value, uploadSession.value);
+
+      if (invalidPartNumbers.length > 0) {
+        const invalidSet = new Set(invalidPartNumbers);
+        uploadSession.value = {
+          ...uploadSession.value,
+          uploadedParts: (uploadSession.value.uploadedParts ?? []).filter((partNumber) => !invalidSet.has(partNumber)),
+          uploadedPartDetails: (uploadSession.value.uploadedPartDetails ?? []).filter((part) => !invalidSet.has(part.number))
+        };
+        syncProgressFromSession(uploadSession.value);
+        message.value = `检测到 ${invalidPartNumbers.length} 个异常分片，请点击继续上传进行重传`;
+        return;
+      }
+    }
+
     const completedVideo = await apiRequest<{ id: string }>(
       "/upload/complete",
       {
@@ -316,6 +482,7 @@ async function completeUpload() {
     );
     message.value = "上传已完成";
     await refreshStatus();
+    await fetchUploadHistory();
     await router.push(`/dashboard/videos/${completedVideo.id}`);
   } catch (error) {
     message.value = error instanceof Error ? error.message : "上传完成失败";
@@ -331,6 +498,7 @@ async function cancelUpload() {
 
   loading.cancel = true;
   cancelRequested.value = true;
+  pauseRequested.value = false;
   try {
     uploadSession.value = await apiRequest<UploadSessionState>(
       "/upload/cancel",
@@ -340,6 +508,9 @@ async function cancelUpload() {
       },
       authStore.token.value
     );
+    uploadRuntimeState.value = "idle";
+    syncProgressFromSession(uploadSession.value);
+    await fetchUploadHistory();
     message.value = "上传已取消";
   } catch (error) {
     message.value = error instanceof Error ? error.message : "取消上传失败";
@@ -371,37 +542,229 @@ async function readVideoPoster(file: File) {
   return await new Promise<string | null>((resolve) => {
     const video = document.createElement("video");
     const objectUrl = URL.createObjectURL(file);
+    let settled = false;
 
-    video.preload = "metadata";
-    video.muted = true;
-    video.playsInline = true;
+    const finalize = (value: string | null) => {
+      if (settled) {
+        return;
+      }
 
-    video.onloadeddata = () => {
+      settled = true;
+      URL.revokeObjectURL(objectUrl);
+      resolve(value);
+    };
+
+    const captureFrame = () => {
       const canvas = document.createElement("canvas");
       canvas.width = video.videoWidth || 640;
       canvas.height = video.videoHeight || 360;
       const context = canvas.getContext("2d");
 
       if (!context) {
-        URL.revokeObjectURL(objectUrl);
-        resolve(null);
+        finalize(null);
         return;
       }
 
       context.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const poster = canvas.toDataURL("image/jpeg", 0.85);
-      URL.revokeObjectURL(objectUrl);
-      resolve(poster);
+      finalize(canvas.toDataURL("image/jpeg", 0.85));
+    };
+
+    video.preload = "metadata";
+    video.muted = true;
+    video.playsInline = true;
+    video.onloadedmetadata = () => {
+      const targetTime = video.duration > 1 ? 1 : 0.1;
+
+      if (targetTime > 0) {
+        video.currentTime = targetTime;
+        return;
+      }
+
+      captureFrame();
+    };
+    video.onseeked = () => {
+      captureFrame();
     };
 
     video.onerror = () => {
-      URL.revokeObjectURL(objectUrl);
-      resolve(null);
+      finalize(null);
     };
 
     video.src = objectUrl;
   });
 }
+
+function resetPreviewUrl() {
+  if (!videoPreviewUrl.value) {
+    return;
+  }
+
+  URL.revokeObjectURL(videoPreviewUrl.value);
+  videoPreviewUrl.value = "";
+}
+
+function terminateActiveWorkers() {
+  for (const worker of activeWorkers) {
+    worker.terminate();
+  }
+
+  activeWorkers.clear();
+}
+
+function resetChecksumCache() {
+  selectedFilePartChecksumCache.clear();
+}
+
+function syncProgressFromSession(session: UploadSessionState | null) {
+  if (!session || !partCount.value) {
+    progress.value = 0;
+    return;
+  }
+
+  progress.value = Math.round(((session.uploadedParts?.length ?? 0) / partCount.value) * 100);
+}
+
+function matchesSelectedFile(session: UploadSessionState) {
+  if (!selectedFile.value) {
+    return false;
+  }
+
+  return (
+    session.filename === selectedFile.value.name &&
+    Number(session.fileSizeBytes ?? 0) === selectedFile.value.size &&
+    (!session.mimeType || session.mimeType === selectedFile.value.type || !selectedFile.value.type)
+  );
+}
+
+async function sha256Hex(blob: Blob) {
+  const buffer = await blob.arrayBuffer();
+  const digest = await crypto.subtle.digest("SHA-256", buffer);
+  const bytes = new Uint8Array(digest);
+
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function getLocalPartChecksum(file: File, partSizeBytes: number, partNumber: number) {
+  const cached = selectedFilePartChecksumCache.get(partNumber);
+  if (cached) {
+    return cached;
+  }
+
+  const start = (partNumber - 1) * partSizeBytes;
+  const end = Math.min(start + partSizeBytes, file.size);
+  const checksum = await sha256Hex(file.slice(start, end));
+  selectedFilePartChecksumCache.set(partNumber, checksum);
+  return checksum;
+}
+
+async function findInvalidUploadedParts(file: File, session: UploadSessionState) {
+  const details = session.uploadedPartDetails ?? [];
+  const invalidPartNumbers: number[] = [];
+
+  for (const detail of details) {
+    const checksum = await getLocalPartChecksum(file, session.partSizeBytes, detail.number);
+    if (checksum !== detail.checksum) {
+      invalidPartNumbers.push(detail.number);
+    }
+  }
+
+  return invalidPartNumbers;
+}
+
+function pauseUpload() {
+  if (!canPause.value) {
+    return;
+  }
+
+  pauseRequested.value = true;
+  message.value = "正在暂停上传，会在当前分片完成后停止";
+}
+
+async function fetchUploadHistory() {
+  if (!authStore.token.value) {
+    return;
+  }
+
+  loading.history = true;
+  try {
+    const response = await apiRequest<{ items: UploadHistoryItem[] }>("/upload/history", {}, authStore.token.value);
+    uploadHistory.value = response.items;
+  } catch (error) {
+    message.value = error instanceof Error ? error.message : "上传历史获取失败";
+  } finally {
+    loading.history = false;
+  }
+}
+
+function applyHistorySession(item: UploadHistoryItem) {
+  uploadSession.value = item;
+  form.title = item.title ?? "";
+  form.filename = item.filename ?? "";
+  form.mimeType = item.mimeType ?? "video/mp4";
+  form.fileSizeBytes = Number(item.fileSizeBytes ?? 0);
+  uploadRuntimeState.value = "idle";
+  pauseRequested.value = false;
+  cancelRequested.value = false;
+  syncProgressFromSession(item);
+}
+
+async function continueHistoryUpload(item: UploadHistoryItem) {
+  applyHistorySession(item);
+
+  if (!matchesSelectedFile(item)) {
+    message.value = `已载入历史会话，请重新选择同名文件 ${item.filename ?? ""} 后继续上传`;
+    return;
+  }
+
+  message.value = `正在恢复历史会话：${item.uploadId}`;
+  await uploadSelectedFile();
+}
+
+async function cancelHistoryUpload(item: UploadHistoryItem) {
+  if (uploadRuntimeState.value === "uploading") {
+    return;
+  }
+
+  loading.cancel = true;
+  try {
+    await apiRequest<UploadSessionState>(
+      "/upload/cancel",
+      {
+        method: "DELETE",
+        body: JSON.stringify({ uploadId: item.uploadId })
+      },
+      authStore.token.value
+    );
+
+    if (uploadSession.value?.uploadId === item.uploadId) {
+      uploadSession.value = {
+        ...item,
+        status: "CANCELED",
+        uploadedParts: [],
+        uploadedPartDetails: []
+      };
+      syncProgressFromSession(uploadSession.value);
+      uploadRuntimeState.value = "idle";
+    }
+
+    await fetchUploadHistory();
+    message.value = `已取消历史会话：${item.uploadId}`;
+  } catch (error) {
+    message.value = error instanceof Error ? error.message : "取消历史上传失败";
+  } finally {
+    loading.cancel = false;
+  }
+}
+
+onMounted(async () => {
+  await fetchUploadHistory();
+});
+
+onBeforeUnmount(() => {
+  resetPreviewUrl();
+  resetChecksumCache();
+  terminateActiveWorkers();
+});
 
 function formatBytes(size: number) {
   if (size < 1024) {
@@ -449,7 +812,10 @@ function formatDuration(totalSeconds: number) {
         {{ loading.init ? "步骤 1 创建中..." : "步骤 1 初始化上传" }}
       </button>
       <button class="ghost-button" :disabled="!canUploadParts" @click="uploadSelectedFile">
-        {{ loading.part ? "步骤 2 上传中..." : "步骤 2 上传分片" }}
+        {{ loading.part ? "分片处理中..." : isPaused ? "继续上传" : "步骤 2 上传分片" }}
+      </button>
+      <button class="ghost-button" :disabled="!canPause" @click="pauseUpload">
+        暂停上传
       </button>
       <button class="ghost-button" :disabled="!canRefresh" @click="refreshStatus">
         {{ loading.status ? "刷新中..." : "刷新状态" }}
@@ -480,10 +846,19 @@ function formatDuration(totalSeconds: number) {
     <div class="upload-grid">
       <div class="dropzone-card">
         <div v-if="selectedFile" class="poster-panel">
-          <img v-if="videoPosterDataUrl" :src="videoPosterDataUrl" :alt="form.title || form.filename" class="poster-image" />
+          <video
+            v-if="videoPreviewUrl"
+            :src="videoPreviewUrl"
+            :poster="videoPosterDataUrl || undefined"
+            class="preview-video"
+            controls
+            playsinline
+            preload="metadata"
+          />
+          <img v-else-if="videoPosterDataUrl" :src="videoPosterDataUrl" :alt="form.title || form.filename" class="poster-image" />
           <div v-else class="poster-fallback">
             <strong>{{ form.filename }}</strong>
-            <span>未能提取首帧预览</span>
+            <span>当前浏览器未能生成本地预览，可继续上传</span>
           </div>
           <button class="ghost-button" type="button" :disabled="isUploadLocked" @click="clearSelection">重新选择文件</button>
         </div>
@@ -517,7 +892,7 @@ function formatDuration(totalSeconds: number) {
         <div v-if="selectedFile" class="meta-grid">
           <label class="field">
             <span>自定义名称</span>
-            <input v-model="form.title" :disabled="!authStore.canUpload.value" placeholder="输入上传后展示的名称" />
+            <input v-model="form.title" :disabled="!authStore.canUpload.value || isUploadLocked" placeholder="输入上传后展示的名称" />
           </label>
           <div class="info-row">
             <span>原始文件名</span>
@@ -548,6 +923,48 @@ function formatDuration(totalSeconds: number) {
       <p><strong>状态:</strong> {{ uploadSession.status }}</p>
       <p><strong>总分片数:</strong> {{ partCount }}</p>
       <p><strong>已上传分片:</strong> {{ uploadSession.uploadedParts?.join(", ") || "无" }}</p>
+    </div>
+
+    <div class="history-card">
+      <div class="meta-head">
+        <p class="section-label">上传历史</p>
+        <button class="ghost-button" type="button" :disabled="loading.history || uploadRuntimeState === 'uploading'" @click="fetchUploadHistory">
+          {{ loading.history ? "刷新中..." : "刷新历史" }}
+        </button>
+      </div>
+
+      <ul v-if="uploadHistory.length > 0" class="history-list">
+        <li v-for="item in uploadHistory" :key="item.uploadId" class="history-item">
+          <div class="history-copy">
+            <strong>{{ item.title || item.filename || item.uploadId }}</strong>
+            <span>{{ item.filename }}</span>
+            <span>{{ item.status }} · {{ item.uploadedParts?.length ?? 0 }}/{{ item.totalParts ?? 0 }} 个分片</span>
+            <span>{{ item.createdAt ? new Date(item.createdAt).toLocaleString() : item.uploadId }}</span>
+          </div>
+          <div class="history-actions">
+            <button
+              v-if="item.status !== 'COMPLETED' && item.status !== 'CANCELED'"
+              class="ghost-button"
+              type="button"
+              :disabled="uploadRuntimeState === 'uploading' || loading.cancel"
+              @click="continueHistoryUpload(item)"
+            >
+              继续上传
+            </button>
+            <button
+              v-if="item.status !== 'COMPLETED' && item.status !== 'CANCELED'"
+              class="danger-button"
+              type="button"
+              :disabled="uploadRuntimeState === 'uploading' || loading.cancel"
+              @click="cancelHistoryUpload(item)"
+            >
+              取消
+            </button>
+          </div>
+        </li>
+      </ul>
+
+      <p v-else class="helper">当前还没有上传历史。</p>
     </div>
   </section>
 </template>
@@ -680,12 +1097,19 @@ h2 {
   gap: 14px;
 }
 
+.preview-video,
 .poster-image,
 .poster-fallback {
   width: 100%;
   min-height: 220px;
   border-radius: 18px;
   background: linear-gradient(135deg, #dbeafe 0%, #ecfeff 100%);
+}
+
+.preview-video {
+  display: block;
+  object-fit: contain;
+  background: #020617;
 }
 
 .poster-image {

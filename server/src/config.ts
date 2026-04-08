@@ -15,6 +15,19 @@ function normalizeUrl(value: unknown) {
   return `https://${value}`;
 }
 
+function toPublicOssEndpoint(value: unknown) {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  const normalized = normalizeUrl(value);
+  if (typeof normalized !== "string") {
+    return normalized;
+  }
+
+  return normalized.replace(".aliyuncs.com", ".aliyuncs.com").replace("-internal.aliyuncs.com", ".aliyuncs.com");
+}
+
 const schema = z.object({
   DATABASE_URL: z.string().min(1),
   JWT_SECRET: z.string().min(8),
@@ -25,8 +38,16 @@ const schema = z.object({
   OSS_REGION: z.string().min(1).default("oss-cn-shanghai"),
   OSS_BUCKET: z.string().min(1).default("videofly-dev"),
   OSS_ENDPOINT: z.preprocess(normalizeUrl, z.string().url()).default("https://oss-cn-shanghai.aliyuncs.com"),
+  OSS_PUBLIC_ENDPOINT: z.preprocess(toPublicOssEndpoint, z.string().url()).optional(),
   OSS_ACCESS_KEY_ID: z.string().min(1).default("replace-me"),
   OSS_ACCESS_KEY_SECRET: z.string().min(1).default("replace-me")
 });
 
-export const config = schema.parse(process.env);
+const parsedConfig = schema.parse(process.env);
+
+export const config = {
+  ...parsedConfig,
+  OSS_PUBLIC_ENDPOINT:
+    parsedConfig.OSS_PUBLIC_ENDPOINT ??
+    (toPublicOssEndpoint(parsedConfig.OSS_ENDPOINT) as string)
+};

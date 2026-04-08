@@ -1,8 +1,7 @@
 import crypto from "node:crypto";
-import path from "node:path";
 
 import { Role, VideoStatus } from "@prisma/client";
-import { Router } from "express";
+import { Router, raw } from "express";
 import { z } from "zod";
 
 import { HttpError } from "../lib/errors.js";
@@ -10,9 +9,8 @@ import {
   abortMultipartUpload,
   buildOssObjectKey,
   completeMultipartUpload,
-  getSignedUploadPartUrl,
   initMultipartUpload,
-  listUploadedParts
+  uploadMultipartPart
 } from "../lib/oss.js";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
@@ -57,6 +55,81 @@ export const uploadRouter = Router();
 
 uploadRouter.use(requireAuth, requireRole([Role.UPLOADER, Role.ADMIN]));
 
+type StoredUploadPart = {
+  number: number;
+  etag: string;
+  checksum: string;
+};
+
+type SerializedUploadSessionInput = {
+  uploadId: string;
+  status: string;
+  partSizeBytes: number;
+  fileSizeBytes: bigint;
+  uploadedParts: unknown;
+  title?: string;
+  filename?: string;
+  mimeType?: string;
+  createdAt?: Date;
+  updatedAt?: Date;
+};
+
+function normalizeStoredUploadParts(value: unknown): StoredUploadPart[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item: unknown) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+
+      const typedItem = item as { number?: unknown; etag?: unknown; checksum?: unknown };
+      const number = Number(typedItem.number);
+      const etag = typeof typedItem.etag === "string" ? typedItem.etag.trim() : "";
+      const checksum = typeof typedItem.checksum === "string" ? typedItem.checksum.trim().toLowerCase() : "";
+
+      if (!Number.isInteger(number) || number <= 0 || !etag || !checksum) {
+        return null;
+      }
+
+      return {
+        number,
+        etag,
+        checksum
+      };
+    })
+    .filter((item): item is StoredUploadPart => Boolean(item))
+    .sort((a, b) => a.number - b.number);
+}
+
+function partNumbers(parts: StoredUploadPart[]) {
+  return parts.map((part) => part.number);
+}
+
+function serializeUploadSession(session: SerializedUploadSessionInput) {
+  const uploadedPartDetails = normalizeStoredUploadParts(session.uploadedParts).map((part) => ({
+    number: part.number,
+    checksum: part.checksum
+  }));
+
+  return {
+    uploadId: session.uploadId,
+    status: session.status,
+    partSizeBytes: session.partSizeBytes,
+    fileSizeBytes: session.fileSizeBytes.toString(),
+    uploadedParts: uploadedPartDetails.map((part) => part.number),
+    uploadedPartDetails,
+    totalParts: Math.ceil(Number(session.fileSizeBytes) / session.partSizeBytes),
+    ...(session.title ? { title: session.title } : {}),
+    ...(session.filename ? { filename: session.filename } : {}),
+    ...(session.mimeType ? { mimeType: session.mimeType } : {}),
+    ...(session.createdAt ? { createdAt: session.createdAt.toISOString() } : {}),
+    ...(session.updatedAt ? { updatedAt: session.updatedAt.toISOString() } : {})
+  };
+}
+
 uploadRouter.post("/init", async (req, res, next) => {
   try {
     const input = initUploadSchema.parse(req.body);
@@ -66,8 +139,37 @@ uploadRouter.post("/init", async (req, res, next) => {
     }
 
     const uploadId = crypto.randomUUID();
-    const filename = `${uploadId}${path.extname(input.filename) || ".mp4"}`;
-    const ossKey = buildOssObjectKey(req.auth!.userId, uploadId, filename);
+    const filename = input.filename;
+    const ossKey = buildOssObjectKey(input.filename);
+    const existingVideo = await prisma.video.findUnique({
+      where: { ossKey },
+      select: { id: true }
+    });
+
+    if (existingVideo) {
+      throw new HttpError(409, "Filename already exists. Please rename the file and try again");
+    }
+
+    const activeSession = await uploadSessionStore.findFirst({
+      where: {
+        ossKey,
+        status: {
+          in: [UPLOAD_SESSION_STATUS.INITIATED, UPLOAD_SESSION_STATUS.UPLOADING]
+        }
+      },
+      select: {
+        uploadId: true,
+        uploaderId: true,
+        partSizeBytes: true,
+        status: true,
+        uploadedParts: true
+      }
+    });
+
+    if (activeSession) {
+      throw new HttpError(409, "Filename already exists. Please rename the file and try again");
+    }
+
     const ossUploadId = await initMultipartUpload(ossKey, input.mimeType);
     const session = await uploadSessionStore.create({
       data: {
@@ -85,16 +187,12 @@ uploadRouter.post("/init", async (req, res, next) => {
         uploadId: true,
         partSizeBytes: true,
         status: true,
-        uploadedParts: true
+        uploadedParts: true,
+        fileSizeBytes: true
       }
     });
 
-    res.status(201).json({
-      uploadId: session.uploadId,
-      partSizeBytes: session.partSizeBytes,
-      status: session.status,
-      uploadedParts: session.uploadedParts
-    });
+    res.status(201).json(serializeUploadSession(session));
   } catch (error) {
     next(error);
   }
@@ -123,23 +221,99 @@ uploadRouter.post("/part", async (req, res, next) => {
       throw new HttpError(500, "Upload session is missing OSS metadata");
     }
 
-    const updated = await uploadSessionStore.update({
+    res.json({
+      uploadId: session.uploadId,
+      status: UPLOAD_SESSION_STATUS.UPLOADING
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+uploadRouter.put("/part/upload", raw({ type: "*/*", limit: "20mb" }), async (req, res, next) => {
+  try {
+    const input = uploadPartSchema.parse(req.query);
+    const chunk = req.body;
+
+    if (!Buffer.isBuffer(chunk) || chunk.length === 0) {
+      throw new HttpError(400, "Missing upload chunk");
+    }
+
+    const session = await uploadSessionStore.findUnique({
       where: { uploadId: input.uploadId },
-      data: {
-        status: UPLOAD_SESSION_STATUS.UPLOADING
-      },
       select: {
         uploadId: true,
-        status: true
+        uploadedParts: true,
+        uploaderId: true,
+        status: true,
+        partSizeBytes: true,
+        fileSizeBytes: true,
+        ossKey: true,
+        ossUploadId: true
       }
     });
 
-    const signedUpload = await getSignedUploadPartUrl(session.ossKey, session.ossUploadId, input.partNumber);
+    if (!session || session.uploaderId !== req.auth!.userId) {
+      throw new HttpError(404, "Upload session not found");
+    }
 
-    res.json({
-      ...updated,
-      ...signedUpload
+    if (session.status === UPLOAD_SESSION_STATUS.CANCELED) {
+      throw new HttpError(400, "Upload session has been canceled");
+    }
+
+    if (session.status === UPLOAD_SESSION_STATUS.COMPLETED) {
+      throw new HttpError(400, "Upload session has already completed");
+    }
+
+    if (!session.ossKey || !session.ossUploadId) {
+      throw new HttpError(500, "Upload session is missing OSS metadata");
+    }
+
+    const providedChecksum = req.header("x-part-sha256")?.trim().toLowerCase();
+    if (!providedChecksum) {
+      throw new HttpError(400, "Missing x-part-sha256 header");
+    }
+
+    const computedChecksum = crypto.createHash("sha256").update(chunk).digest("hex");
+    if (computedChecksum !== providedChecksum) {
+      throw new HttpError(400, `Part checksum mismatch for part ${input.partNumber}`);
+    }
+
+    if (chunk.length > session.partSizeBytes) {
+      throw new HttpError(400, "Chunk exceeds configured part size");
+    }
+
+    const etag = await uploadMultipartPart(session.ossKey, session.ossUploadId, input.partNumber, chunk);
+    if (!etag) {
+      throw new HttpError(502, "OSS upload did not return an ETag");
+    }
+
+    const uploadedParts = normalizeStoredUploadParts(session.uploadedParts);
+    const dedupedParts = [
+      ...uploadedParts.filter((part) => part.number !== input.partNumber),
+      {
+        number: input.partNumber,
+        etag,
+        checksum: computedChecksum
+      }
+    ].sort((a, b) => a.number - b.number);
+
+    const updated = await uploadSessionStore.update({
+      where: { uploadId: input.uploadId },
+      data: {
+        status: UPLOAD_SESSION_STATUS.UPLOADING,
+        uploadedParts: dedupedParts
+      },
+      select: {
+        uploadId: true,
+        status: true,
+        partSizeBytes: true,
+        fileSizeBytes: true,
+        uploadedParts: true
+      }
     });
+
+    res.json(serializeUploadSession(updated));
   } catch (error) {
     next(error);
   }
@@ -168,7 +342,7 @@ uploadRouter.post("/complete", async (req, res, next) => {
       throw new HttpError(500, "Upload session is missing OSS metadata");
     }
 
-    const uploadedParts = await listUploadedParts(session.ossKey, session.ossUploadId);
+    const uploadedParts = normalizeStoredUploadParts(session.uploadedParts);
     const expectedPartCount = Math.ceil(Number(session.fileSizeBytes) / session.partSizeBytes);
 
     if (uploadedParts.length !== expectedPartCount) {
@@ -182,7 +356,7 @@ uploadRouter.post("/complete", async (req, res, next) => {
         where: { uploadId: input.uploadId },
         data: {
           status: UPLOAD_SESSION_STATUS.COMPLETED,
-          uploadedParts: uploadedParts.map((part) => part.number)
+          uploadedParts
         }
       }),
       prisma.video.create({
@@ -224,7 +398,11 @@ uploadRouter.delete("/cancel", async (req, res, next) => {
     }
 
     if (session.ossKey && session.ossUploadId && session.status !== UPLOAD_SESSION_STATUS.COMPLETED) {
-      await abortMultipartUpload(session.ossKey, session.ossUploadId);
+      try {
+        await abortMultipartUpload(session.ossKey, session.ossUploadId);
+      } catch (error) {
+        console.warn("Failed to abort multipart upload in OSS, marking session canceled locally.", error);
+      }
     }
 
     const canceled = await uploadSessionStore.update({
@@ -240,6 +418,36 @@ uploadRouter.delete("/cancel", async (req, res, next) => {
     });
 
     res.json(canceled);
+  } catch (error) {
+    next(error);
+  }
+});
+
+uploadRouter.get("/history", async (req, res, next) => {
+  try {
+    const sessions = await uploadSessionStore.findMany({
+      where: {
+        uploaderId: req.auth!.userId
+      },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+      select: {
+        uploadId: true,
+        title: true,
+        filename: true,
+        mimeType: true,
+        status: true,
+        partSizeBytes: true,
+        fileSizeBytes: true,
+        uploadedParts: true,
+        createdAt: true,
+        updatedAt: true
+      }
+    });
+
+    res.json({
+      items: (sessions as SerializedUploadSessionInput[]).map((session) => serializeUploadSession(session))
+    });
   } catch (error) {
     next(error);
   }
@@ -266,36 +474,7 @@ uploadRouter.get("/status/:uploadId", async (req, res, next) => {
       throw new HttpError(404, "Upload session not found");
     }
 
-    let uploadedParts = Array.isArray(session.uploadedParts)
-      ? (session.uploadedParts as unknown[])
-          .map((value: unknown) => Number(value))
-          .filter((value: number) => Number.isInteger(value) && value > 0)
-      : [];
-
-    if (
-      session.status !== UPLOAD_SESSION_STATUS.CANCELED &&
-      session.status !== UPLOAD_SESSION_STATUS.COMPLETED &&
-      session.ossKey &&
-      session.ossUploadId
-    ) {
-      const ossParts = await listUploadedParts(session.ossKey, session.ossUploadId);
-      uploadedParts = ossParts.map((part) => part.number);
-
-      await uploadSessionStore.update({
-        where: { uploadId },
-        data: {
-          uploadedParts
-        }
-      });
-    }
-
-    res.json({
-      uploadId: session.uploadId,
-      status: session.status,
-      partSizeBytes: session.partSizeBytes,
-      fileSizeBytes: session.fileSizeBytes.toString(),
-      uploadedParts
-    });
+    res.json(serializeUploadSession(session));
   } catch (error) {
     next(error);
   }

@@ -1,0 +1,2 @@
+ALTER TABLE "UploadSession"
+ADD COLUMN IF NOT EXISTS "ossUploadId" TEXT;
