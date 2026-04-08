@@ -591,10 +591,15 @@ uploadRouter.get("/status/:uploadId", async (req, res, next) => {
       where: { uploadId },
       select: {
         uploadId: true,
+        title: true,
+        filename: true,
+        mimeType: true,
         status: true,
         partSizeBytes: true,
         uploadedParts: true,
         fileSizeBytes: true,
+        createdAt: true,
+        updatedAt: true,
         uploaderId: true,
         ossKey: true,
         ossUploadId: true

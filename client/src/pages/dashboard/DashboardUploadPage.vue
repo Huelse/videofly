@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ElMessage } from "element-plus";
 import type { UploadFile, UploadFiles, UploadRawFile } from "element-plus";
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
@@ -243,6 +244,10 @@ function clearSelection() {
     return;
   }
 
+  resetUploadFormState();
+}
+
+function resetUploadFormState() {
   selectedFile.value = null;
   selectedFiles.value = [];
   durationSeconds.value = null;
@@ -384,7 +389,10 @@ async function uploadSelectedFile() {
         })
       );
 
-      uploadSession.value = await fetchLatestUploadSession(uploadSession.value.uploadId);
+      uploadSession.value = mergeUploadSessionState(
+        uploadSession.value,
+        await fetchLatestUploadSession(uploadSession.value.uploadId)
+      );
       syncProgressFromSession(uploadSession.value);
 
       if (cancelRequested.value) {
@@ -803,7 +811,9 @@ async function finalizeUploadSession(uploadId: string, redirectToVideo = false) 
     }
 
     await fetchUploadHistory();
-    message.value = "上传已完成并已入库";
+    resetUploadFormState();
+    message.value = "";
+    ElMessage.success("上传已完成并已入库");
 
     if (redirectToVideo) {
       await router.push(`/dashboard/videos/${completedVideo.id}`);

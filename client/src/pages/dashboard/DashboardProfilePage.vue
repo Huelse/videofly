@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref } from "vue";
+import { computed, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
 
 import type { AuthUser, UserStorageUsage } from "../../api";
@@ -24,18 +24,26 @@ const passwordForm = reactive({
   newPassword: "",
   confirmPassword: ""
 });
+const canViewStorage = computed(() => user.value?.role === "UPLOADER" || user.value?.role === "ADMIN");
 
 async function fetchProfile() {
   loading.value = true;
 
   try {
-    const [currentUser, storageUsage] = await Promise.all([
-      apiRequest<AuthUser>("/users/me", {}, authStore.token.value),
-      apiRequest<UserStorageUsage>("/users/me/storage", {}, authStore.token.value)
-    ]);
-
+    const currentUser = await apiRequest<AuthUser>("/users/me", {}, authStore.token.value);
     user.value = currentUser;
-    usage.value = storageUsage;
+
+    if (currentUser.role === "UPLOADER" || currentUser.role === "ADMIN") {
+      usage.value = await apiRequest<UserStorageUsage>("/users/me/storage", {}, authStore.token.value);
+    } else {
+      usage.value = {
+        totalSizeBytes: "0",
+        reservedUploadBytes: "0",
+        uploadQuotaBytes: "0",
+        remainingQuotaBytes: "0",
+        videoCount: 0
+      };
+    }
   } catch (error) {
     showApiError(error, "我的信息获取失败");
   } finally {
@@ -122,15 +130,15 @@ void fetchProfile();
           <span>注册时间</span>
           <strong>{{ user?.createdAt ? new Date(user.createdAt).toLocaleString() : "--" }}</strong>
         </div>
+        <button class="primary-button" type="button" @click="openPasswordDialog">修改密码</button>
       </article>
 
-      <article class="info-card">
+      <article v-if="canViewStorage" class="info-card">
         <p class="card-title">存储用量</p>
         <div class="usage-value">{{ formatBytes(usage.totalSizeBytes) }} / {{ formatBytes(usage.uploadQuotaBytes) }}</div>
         <p class="usage-caption">当前有效视频 {{ usage.videoCount }} 个</p>
         <p class="usage-caption">待完成上传 {{ formatBytes(usage.reservedUploadBytes) }}</p>
         <p class="usage-caption">剩余额度 {{ formatBytes(usage.remainingQuotaBytes) }}</p>
-        <button class="primary-button" type="button" @click="openPasswordDialog">修改密码</button>
       </article>
     </div>
 
