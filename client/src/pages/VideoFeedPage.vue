@@ -1,13 +1,11 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
-import { RouterLink } from "vue-router";
 
 import type { VideoItem } from "../api";
 import { apiBaseUrl, apiRequest } from "../api";
 import VideoFeedDialog from "../components/video/VideoFeedDialog.vue";
 import VideoListCard from "../components/video/VideoListCard.vue";
 import { showApiError } from "../lib/feedback";
-import { formatBytes } from "../lib/storage";
 import { authStore } from "../stores/auth";
 
 const videos = ref<VideoItem[]>([]);
@@ -64,22 +62,20 @@ onMounted(fetchVideos);
           <button class="ghost-button" :disabled="loading" @click="fetchVideos">
             {{ loading ? "刷新中..." : "换一批视频" }}
           </button>
-          <RouterLink class="ghost-link" to="/dashboard/me">返回后台</RouterLink>
         </div>
       </div>
 
-      <p class="helper-text">该页面会在新浏览器窗口打开，展示随机视频瀑布流。</p>
+      <p class="helper-text">该页面会在新浏览器窗口打开，展示随机视频流。</p>
       <div v-if="!loading && videos.length === 0" class="empty-card">
         当前还没有可观看的视频
       </div>
 
-      <div v-else class="waterfall-flow">
-        <div v-for="video in videos" :key="video.id" class="waterfall-item">
+      <div v-else class="feed-flow">
+        <div v-for="video in videos" :key="video.id" class="feed-item">
           <VideoListCard
             :title="video.title"
             :preview-url="previewUrl(video.id)"
             :preview-enabled="!failedPreviewIds.has(video.id)"
-            :size-label="formatBytes(video.sizeBytes)"
             :created-at-label="new Date(video.createdAt).toLocaleString()"
             @preview-error="handlePreviewError(video.id)"
             @select="openVideoDialog(video.id)"
@@ -148,27 +144,21 @@ h2 {
   cursor: pointer;
 }
 
-.ghost-link {
-  text-decoration: none;
-  border-radius: 14px;
-  padding: 10px 14px;
-  background: #eaf2f8;
-  color: #102a43;
-}
-
 .helper-text {
   margin: 0 0 18px;
   color: #52606d;
 }
 
-.waterfall-flow {
-  column-count: 3;
-  column-gap: 16px;
+.feed-flow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
 }
 
-.waterfall-item {
-  break-inside: avoid;
-  margin-bottom: 16px;
+.feed-item {
+  flex: 0 1 calc((100% - 64px) / 5);
+  min-width: 220px;
+  max-width: calc((100% - 64px) / 5);
 }
 
 .empty-card {
@@ -179,9 +169,24 @@ h2 {
   text-align: center;
 }
 
+@media (max-width: 1440px) {
+  .feed-item {
+    flex-basis: calc((100% - 48px) / 4);
+    max-width: calc((100% - 48px) / 4);
+  }
+}
+
 @media (max-width: 1080px) {
-  .waterfall-flow {
-    column-count: 2;
+  .feed-item {
+    flex-basis: calc((100% - 32px) / 3);
+    max-width: calc((100% - 32px) / 3);
+  }
+}
+
+@media (max-width: 840px) {
+  .feed-item {
+    flex-basis: calc((100% - 16px) / 2);
+    max-width: calc((100% - 16px) / 2);
   }
 }
 
@@ -194,8 +199,10 @@ h2 {
     flex-direction: column;
   }
 
-  .waterfall-flow {
-    column-count: 1;
+  .feed-item {
+    flex-basis: 100%;
+    min-width: 100%;
+    max-width: 100%;
   }
 }
 </style>

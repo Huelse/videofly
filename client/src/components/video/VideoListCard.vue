@@ -4,7 +4,7 @@ const props = defineProps<{
   detailTo?: string;
   previewUrl: string;
   previewEnabled: boolean;
-  sizeLabel: string;
+  sizeLabel?: string;
   createdAtLabel: string;
 }>();
 
@@ -34,7 +34,6 @@ function handleSelect() {
           loading="lazy"
           @error="handlePreviewError"
         />
-        <strong>{{ props.title }}</strong>
       </div>
     </RouterLink>
     <button v-else class="card-link card-button" type="button" @click="handleSelect">
@@ -47,23 +46,28 @@ function handleSelect() {
           loading="lazy"
           @error="handlePreviewError"
         />
-        <strong>{{ props.title }}</strong>
       </div>
     </button>
 
     <div class="card-body">
-      <p class="meta-line">{{ props.sizeLabel }}</p>
-      <p class="meta-line">{{ props.createdAtLabel }}</p>
+      <p class="card-title">{{ props.title }}</p>
+      <div class="meta-row">
+        <p v-if="props.sizeLabel" class="meta-line">{{ props.sizeLabel }}</p>
+        <p class="meta-line">{{ props.createdAtLabel }}</p>
+      </div>
     </div>
   </article>
 </template>
 
 <style scoped>
 .video-card {
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   border-radius: 20px;
   background: #f8fbff;
   border: 1px solid rgba(148, 163, 184, 0.16);
+  min-width: 0;
 }
 
 .card-link {
@@ -102,23 +106,29 @@ function handleSelect() {
   object-fit: cover;
 }
 
-.card-poster strong {
-  position: relative;
-  z-index: 1;
-  font-size: 1rem;
-  line-height: 1.35;
-  text-shadow: 0 2px 12px rgba(15, 23, 42, 0.62);
-}
-
 .card-body {
   display: grid;
-  gap: 6px;
+  gap: 8px;
   padding: 14px 16px 16px;
+}
+
+.card-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.4;
+  color: #102a43;
+}
+
+.meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
 }
 
 .meta-line {
   margin: 0;
   color: #52606d;
-  font-size: 0.92rem;
+  font-size: 0.88rem;
 }
 </style>
