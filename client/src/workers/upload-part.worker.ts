@@ -24,6 +24,7 @@ type UploadWorkerSuccess = {
 type UploadWorkerError = {
   type: "error";
   partNumber: number;
+  attempts: number;
   message: string;
 };
 
@@ -102,6 +103,7 @@ self.onmessage = async (event: MessageEvent<UploadWorkerRequest>) => {
   respond({
     type: "error",
     partNumber: payload.partNumber,
-    message: lastError
+    attempts: maxAttempts,
+    message: `Part ${payload.partNumber} upload failed after ${maxAttempts} attempts: ${lastError}`
   });
 };

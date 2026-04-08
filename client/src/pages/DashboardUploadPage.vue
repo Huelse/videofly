@@ -124,6 +124,15 @@ const canCancel = computed(() => {
   return uploadSession.value.status !== "COMPLETED" && uploadSession.value.status !== "CANCELED";
 });
 
+function isSessionReadyToComplete(session: UploadSessionState | null) {
+  if (!session || session.status === "COMPLETED" || session.status === "CANCELED") {
+    return false;
+  }
+
+  const totalParts = session.totalParts ?? Math.ceil(Number(session.fileSizeBytes ?? 0) / session.partSizeBytes);
+  return totalParts > 0 && (session.uploadedParts?.length ?? 0) >= totalParts;
+}
+
 const workflowSteps = computed(() => {
   const currentStatus = uploadSession.value?.status;
 
@@ -356,6 +365,13 @@ async function uploadSelectedFile() {
 
     uploadRuntimeState.value = "idle";
     syncProgressFromSession(uploadSession.value);
+
+    if (isSessionReadyToComplete(uploadSession.value)) {
+      message.value = `已完成 ${totalParts} 个分片上传，正在合并并入库`;
+      await finalizeUploadSession(uploadSession.value.uploadId);
+      return;
+    }
+
     message.value = `已完成 ${totalParts} 个分片上传`;
     await fetchUploadHistory();
   } catch (error) {
@@ -474,18 +490,7 @@ async function completeUpload() {
       }
     }
 
-    const completedVideo = await apiRequest<{ id: string }>(
-      "/upload/complete",
-      {
-        method: "POST",
-        body: JSON.stringify({ uploadId: uploadSession.value.uploadId })
-      },
-      authStore.token.value
-    );
-    message.value = "上传已完成";
-    await refreshStatus();
-    await fetchUploadHistory();
-    await router.push(`/dashboard/videos/${completedVideo.id}`);
+    await finalizeUploadSession(uploadSession.value.uploadId, true);
   } catch (error) {
     message.value = error instanceof Error ? error.message : "上传完成失败";
   } finally {
@@ -719,6 +724,12 @@ function applyHistorySession(item: UploadHistoryItem) {
 async function continueHistoryUpload(item: UploadHistoryItem) {
   applyHistorySession(item);
 
+  if (isSessionReadyToComplete(item)) {
+    message.value = `检测到历史会话分片已齐，正在完成上传：${item.uploadId}`;
+    await finalizeUploadSession(item.uploadId);
+    return;
+  }
+
   if (!matchesSelectedFile(item)) {
     message.value = `已载入历史会话，请重新选择同名文件 ${item.filename ?? ""} 后继续上传`;
     return;
@@ -726,6 +737,32 @@ async function continueHistoryUpload(item: UploadHistoryItem) {
 
   message.value = `正在恢复历史会话：${item.uploadId}`;
   await uploadSelectedFile();
+}
+
+async function finalizeUploadSession(uploadId: string, redirectToVideo = false) {
+  const completedVideo = await apiRequest<{ id: string }>(
+    "/upload/complete",
+    {
+      method: "POST",
+      body: JSON.stringify({ uploadId })
+    },
+    authStore.token.value
+  );
+
+  if (uploadSession.value?.uploadId === uploadId) {
+    uploadSession.value = {
+      ...uploadSession.value,
+      status: "COMPLETED"
+    };
+    syncProgressFromSession(uploadSession.value);
+  }
+
+  await fetchUploadHistory();
+  message.value = "上传已完成并已入库";
+
+  if (redirectToVideo) {
+    await router.push(`/dashboard/videos/${completedVideo.id}`);
+  }
 }
 
 async function cancelHistoryUpload(item: UploadHistoryItem) {
@@ -962,7 +999,7 @@ function formatDuration(totalSeconds: number) {
               :disabled="uploadRuntimeState === 'uploading' || loading.cancel"
               @click="continueHistoryUpload(item)"
             >
-              继续上传
+              {{ isSessionReadyToComplete(item) ? "完成上传" : "继续上传" }}
             </button>
             <button
               v-if="item.status !== 'COMPLETED' && item.status !== 'CANCELED'"
