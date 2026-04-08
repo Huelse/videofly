@@ -1,235 +1,185 @@
 # Videofly
 
-视频上传平台-技术作业
+视频上传与观看平台，包含 Vue 3 前端、Express + Prisma 后端、PostgreSQL 数据库，以及基于 Docker Compose 的部署方案。
 
-## 已初始化内容
+## 部署说明
 
-- `server/`: Express + TypeScript + Prisma + PostgreSQL 基础骨架
-- `client/`: Vue 3 + TypeScript + Vite + Element Plus 基础骨架
-- `docker-compose.yml`: PostgreSQL 本地开发编排
-- `.env.example`: 根目录与服务端环境变量样例
-- `pnpm-workspace.yaml`: monorepo workspace 配置
-
-## 快速开始
+### 本地开发
 
 1. 安装依赖
 
-   ```bash
-   pnpm install
-   ```
-
-2. 复制环境变量
-
-   ```bash
-   cp .env.example .env
-   ```
-
-3. 启动 PostgreSQL
-
-   ```bash
-   docker compose up -d postgres
-   ```
-
-4. 生成 Prisma Client 并执行迁移
-
-   ```bash
-   pnpm --filter @videofly/server prisma:generate
-   pnpm --filter @videofly/server prisma:migrate
-   ```
-
-5. 启动前后端开发环境
-
-   ```bash
-   pnpm dev
-   ```
-
-## Docker Compose 部署
-
-项目现在支持通过 Docker Compose 在 Ubuntu 服务器直接运行完整服务，包含：
-
-- `postgres`: PostgreSQL 17
-- `server`: Express + Prisma API
-- `client`: Nginx 托管的 Vue 前端静态站点
-- `nginx`: 对外入口网关，绑定域名 `videofly.oini.top`，转发 `/` 到前端、`/api/*` 到 API，并承载 HTTPS
-- `certbot`: 通过 Let's Encrypt 申请和续期证书
-
-### 本地或服务器启动
-
-1. 准备 `.env`
-
-   ```bash
-   cp .env.example .env
-   ```
-
-2. 启动完整服务
-
-   ```bash
-   docker compose up -d --build
-   ```
-
-3. 查看状态
-
-   ```bash
-   docker compose ps
-   docker compose logs -f
-   ```
-
-默认由 `nginx` 服务对外暴露 `80` 端口。
-
-如果 DNS 已将 `videofly.oini.top` 指向服务器公网 IP，可直接访问：
-
-```text
-https://videofly.oini.top
+```bash
+pnpm install
 ```
 
-### 一键发布到 Ubuntu 服务器
+2. 准备环境变量
 
-仓库已提供部署脚本 [scripts/deploy.sh](/Users/max/projects/videofly/scripts/deploy.sh)，默认会发布到：
+```bash
+cp .env.example .env
+```
 
-- SSH: `root@42.121.218.102`
-- Key: `~/.ssh/platform-eng-2.pem`
-- Remote Dir: `/opt/videofly`
-- Domain: `videofly.oini.top`
+3. 启动数据库
+
+```bash
+docker compose up -d postgres
+```
+
+4. 初始化 Prisma
+
+```bash
+pnpm --filter @videofly/server prisma:generate
+pnpm --filter @videofly/server prisma:migrate
+```
+
+5. 启动前后端
+
+```bash
+pnpm dev
+```
+
+默认开发入口：
+
+- 前端：`http://localhost:5173`
+- 后端：`http://localhost:3000/api/v1`
+- OpenAPI：`http://localhost:3000/api/v1/openapi.json`
+
+### Docker Compose 运行
+
+仓库根目录提供完整编排：
+
+- `postgres`：PostgreSQL
+- `server`：Express API + Prisma
+- `nginx`：静态前端托管与反向代理
+- `certbot`：Let's Encrypt 证书申请与续期
+
+启动命令：
+
+```bash
+docker compose up -d --build
+```
+
+常用排查命令：
+
+```bash
+docker compose ps
+docker compose logs -f
+```
+
+### 服务器发布
+
+项目内置部署脚本 [deploy.sh](/Users/max/projects/videofly/scripts/deploy.sh)，默认发布到：
+
+- 服务器：`root@42.121.218.102`
+- 目录：`/opt/videofly`
+- 域名：`videofly.oini.top`
 
 执行方式：
 
 ```bash
-chmod +x scripts/deploy.sh
-./scripts/deploy.sh
+bash scripts/deploy.sh
 ```
 
-首次申请 HTTPS 证书前，请确认：
+脚本会执行以下流程：
 
-- `videofly.oini.top` 已解析到服务器公网 IP
-- 服务器安全组已放通 `80` 和 `443`
-- `.env` 中已配置 `LETSENCRYPT_EMAIL`
+1. 构建前端静态资源
+2. 通过 `rsync` 同步项目到远端
+3. 使用 HTTP 配置启动 `postgres`、`server`、`nginx`
+4. 通过 `certbot` 申请或续期证书
+5. 切换到 HTTPS Nginx 配置并重载
 
-如需覆盖默认值，可以临时传入：
+部署前需要确保：
 
-```bash
-REMOTE_HOST=root@42.121.218.102 REMOTE_DIR=/opt/videofly ./scripts/deploy.sh
-```
+- `.env` 已存在且包含生产可用配置
+- 域名 DNS 已指向目标服务器
+- 服务器已开放 `80` 与 `443` 端口
+- OSS 访问密钥、JWT 密钥、`LETSENCRYPT_EMAIL` 已正确配置
 
-## 当前已提供的基础接口
+## 架构概述
 
-- `GET /api/v1/health`
-- `POST /api/v1/auth/register`
-- `POST /api/v1/auth/login`
-- `POST /api/v1/auth/logout`
-- `POST /api/v1/auth/reset-password`
-- `PUT /api/v1/auth/reset-password`
-- `GET /api/v1/users/me`
-- `GET /api/v1/users`
-- `PUT /api/v1/users/:id/role`
-- `POST /api/v1/upload/init`
-- `POST /api/v1/upload/part`
-- `POST /api/v1/upload/complete`
-- `DELETE /api/v1/upload/cancel`
-- `GET /api/v1/upload/status/:uploadId`
-- `GET /api/v1/videos`
+### Monorepo 结构
 
-## 技术栈
+- `client/`：Vue 3 + Vite + TypeScript + Element Plus
+- `server/`：Express 5 + TypeScript + Prisma
+- `server/prisma/`：数据库模型、迁移、种子
+- `server/test/`：Vitest 集成测试
+- `deploy/nginx/`：HTTP/HTTPS Nginx 配置
+- `scripts/`：部署与运维脚本
 
-Server: Express, PostgreSQL, Prisma
+### 核心业务链路
 
-Client: Vue 3, TypeScript, Element Plus
+1. 用户通过邮箱密码注册和登录，服务端返回 JWT
+2. 前端使用 Bearer Token 访问受保护接口
+3. 上传者初始化分片上传会话，服务端在数据库和 OSS 中建立状态
+4. 浏览器通过 Web Worker 并发上传分片，服务端校验分片校验和并记录进度
+5. 上传完成后，服务端合并 OSS 分片并写入视频元数据
+6. 观看者、上传者、管理员都可以浏览视频流并播放视频
+7. 视频删除采用软删除，OSS 文件由后台清理任务延迟移除
 
-部署：Docker Compose
+### 当前主要页面
 
-## TODO
+- `/register`：注册
+- `/login`：登录
+- `/dashboard/profile`：个人信息、密码修改、存储用量
+- `/dashboard/upload`：上传中心
+- `/dashboard/my-videos`：我的视频
+- `/dashboard/users`：用户管理
+- `/feed`：独立视频流页面，新窗口打开
 
-以下状态基于当前仓库代码与测试结果整理。
+### 当前主要 API
 
-1. 身份认证与用户管理
+- 认证：`/api/v1/auth/*`
+- 用户：`/api/v1/users/*`
+- 上传：`/api/v1/upload/*`
+- 视频：`/api/v1/videos*`
+- 文档：`/api/v1/openapi.json`、`/api/v1/openapi.yaml`
 
-* [x] 用户通过邮箱密码注册（密码须加密存储bcrypt或同等方案）
-* [x] 用户登录后返回JWT
-* [x] 注册时或由管理员分配角色（角色：上传者、观看者、管理员）
-* [x] 受保护路由（所有上传/管理接口须携带有效Token）
+## 设计决策
 
-2. 视频上传
+### 角色模型
 
-* [x] 将视频文件上传至阿里云OSS（支持 MP4、MOV、AVI、MKV格式）
-* [x] 大文件分片/分块上传（文件可达TB级，不可接受单流上传，WebWorker）
-* [x] 断点续传 — 上传失败或中断后可恢复（通过服务端或OSS分片API追踪分片状态）
-* [x] 向客户端返回上传进度（显示百分比或已上传字节数）
-* [x] 分片失败自动重试（可配置重试次数，每个分片至少重试3次，采用指数退避策略）
-* [x] 上传前进行文件大小和类型校验（尽早拒绝不支持的格式）
-* [ ] 并发上传 — 同时上传多个文件（适当排队和限流）
-* [x] 取消上传（中止分片上传并清理OSS 中的临时数据）
+系统使用三种角色：
 
+- `VIEWER`：浏览和播放视频
+- `UPLOADER`：上传视频、查看自己的上传内容
+- `ADMIN`：管理用户权限、管理额度、删除任意视频
 
-3. 存储与文件管理
+权限校验在后端中间件完成，前端只做导航和交互层限制，不作为安全边界。
 
-* [x] 在数据库中存储视频元数据（标题、上传者、大小、状态、OSS Key）
-* [x] 软删除 — 将视频标记为已删除，不立即从OSS移除（通过定时任务或管理员操作执行永久删除）
-* [ ] 按用户统计存储使用量（可用于配额管理）
-* [ ] 通过OSS预签名URL实现浏览器内视频预览/播放
+### 上传方案
 
-4. 角色与权限
+选择服务端协调的 OSS 分片上传，而不是单次直传：
 
-* [ ] 上传者：上传视频、查看自己的上传、删除自己的视频、查看自己的存储用量
-* [ ] 观看者：浏览和观看视频；不能上传或管理内容
-* [ ] 管理员：拥有上传者和观看者的所有权限；管理所有用户、删除任意视频、查看全部存储用量、分配/撤销角色
+- 支持大文件上传与断点续传
+- 可以在服务端统一做配额校验、重名判断和上传状态持久化
+- 可以在每个分片上传时校验 `SHA-256`，减少损坏分片入库风险
 
-5. OpenAPI/Swagger 文档
+上传对象键当前采用“自定义名称优先”的策略：
 
-## API
+- `title` 作为主名称参与存储文件名生成
+- 原始文件扩展名优先保留
+- 这样用户修改展示名称后，重名判断会随之变化
 
-基础路径：/api/v1
-认证方式：Authorization: Bearer <JWT>（除 /auth/* 外）
+### 播放方案
 
-* 认证与用户（Auth & User）
-方法	路径	说明	权限
-POST	/auth/register	邮箱+密码注册，返回用户信息	公开
-POST	/auth/login	登录，返回 JWT	公开
-POST	/auth/logout	注销（可选，前端清除 token）	任何已登录用户
-POST	/auth/refresh	刷新 Token（如实现 Refresh Token）	任何已登录用户
-POST	/auth/reset-password	请求重置密码邮件	公开
-PUT	/auth/reset-password	使用 token 重置密码	公开
-GET	/users/me	获取当前用户信息	任何已登录用户
-GET	/users	获取所有用户（分页）	管理员
-PUT	/users/:id/role	修改用户角色	管理员
+当前视频播放和预览图不是直接暴露 OSS 地址，而是由服务端代理：
 
-* 视频上传（Upload）
-方法	路径	说明	权限
-POST	/upload/init	初始化上传，返回 uploadId 与分片大小	上传者
-POST	/upload/part	上传单个分片	上传者
-POST	/upload/complete	完成上传，合并分片并写入元数据	上传者
-DELETE	/upload/cancel	取消上传，清理 OSS 临时分片	上传者
-GET	/upload/status/:uploadId	查询已上传分片状态（断点续传）	上传者
+- 服务端统一做鉴权
+- 前端不需要处理 OSS 域名、签名与 CORS
+- 支持 `Range` 请求，适配浏览器视频流播放
 
-* 视频管理（Video）
-方法	路径	说明	权限
-POST	/videos	保存视频元数据（完成上传后调用）	上传者
-GET	/videos	获取视频列表（分页、过滤）	观看者 / 上传者 / 管理员
-GET	/videos/:id	获取视频详情 + 预签名播放 URL	观看者 / 上传者 / 管理员
-GET	/videos/:id/play	直接返回预签名播放 URL	观看者 / 上传者 / 管理员
-DELETE	/videos/:id	软删除视频	上传者（仅自己）/ 管理员
-DELETE	/videos/:id/permanent	永久删除视频（OSS + DB）	管理员
+### 文档方案
 
-* 统计与仪表盘（Stats）
-方法	路径	说明	权限
-GET	/stats/usage	当前用户的存储用量	上传者 / 管理员
-GET	/stats/admin/overview	平台总用量、用户数、视频数	管理员
+OpenAPI 文档采用代码内维护、静态文件导出的方式：
 
-* 健康检查与运维
-方法	路径	说明
-GET	/health	返回服务健康状态
-GET	/metrics	（可选）Prometheus 指标
+- 源定义位于 [openapi.ts](/Users/max/projects/videofly/server/src/openapi.ts)
+- 可生成 [openapi.json](/Users/max/projects/videofly/server/openapi/openapi.json) 与 [openapi.yaml](/Users/max/projects/videofly/server/openapi/openapi.yaml)
+- 服务运行时也提供 `/api/v1/openapi.json` 和 `/api/v1/openapi.yaml`
 
-## 待完善清单
-
-- 多文件并发上传还没做，当前上传中心仍然是单文件模型。
-- 存储统计与配额能力还没落地，`/stats/usage`、`/stats/admin/overview` 也还不存在。
-- 观看者权限还没有闭环。当前后端允许列出视频，但播放接口仍限制为上传者本人或管理员。
-- 上传页对观看者仍可见，只是实际上没有上传权限，前端导航和页面级限制还可以再收紧。
-- README 里写的是“OSS 预签名 URL 播放”，当前实现实际是服务端代理 OSS 流式播放和预览图获取。
-- OpenAPI / Swagger 文档尚未实现。
-- `POST /auth/refresh`、`DELETE /videos/:id/permanent`、`/metrics` 这些文档中列出的接口当前仍未提供。
+这种方式比注释驱动更直接，适合当前规模下快速保持文档和实现一致。
 
 ## 已知限制
 
-* 邮箱注册最好通过发送邮件注册链接完成注册，时间有限当前任意邮箱均可直接注册成功
-* OSS 预签名 URL 播放需要配置CNAME域名，暂无法实现
-* /auth接口未做频率限制和防暴力破解
+- 当前上传中心仍是单文件工作流，不支持同时排队上传多个文件。
+- 视频流列表当前是随机取样 10 条，不支持分页、搜索、推荐排序和无限滚动。
+- 播放和预览由服务端代理 OSS，请求会经过应用层，带来额外带宽和连接压力。
+- 密码找回当前只在服务端日志中输出重置链接，没有接入真实邮件发送通道。
