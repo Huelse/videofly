@@ -60,16 +60,21 @@ async function logout() {
 
 <style scoped>
 .dashboard-shell {
-  min-height: 100vh;
+  height: 100vh;
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .sidebar {
   display: grid;
   align-content: start;
   gap: 24px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
   padding: 28px 22px;
+  overflow-y: auto;
   background: linear-gradient(180deg, #102a43, #0f172a);
   color: #f8fafc;
 }
@@ -136,16 +141,42 @@ h1 {
 }
 
 .content-area {
+  min-width: 0;
+  height: 100vh;
   padding: 28px;
+  overflow-y: auto;
+}
+
+.sidebar,
+.content-area {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.sidebar::-webkit-scrollbar,
+.content-area::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 @media (max-width: 900px) {
   .dashboard-shell {
+    height: auto;
     grid-template-columns: 1fr;
+    overflow: visible;
   }
 
   .sidebar {
+    position: static;
+    height: auto;
+    overflow: visible;
     padding-bottom: 18px;
+  }
+
+  .content-area {
+    height: auto;
+    overflow: visible;
   }
 }
 </style>

@@ -23,6 +23,9 @@ if [[ ! -f ".env" ]]; then
   exit 1
 fi
 
+echo "Building client dist with static API base URL"
+VITE_API_BASE_URL="/api/v1" pnpm --filter @videofly/client build
+
 LETSENCRYPT_EMAIL="$(grep -E '^LETSENCRYPT_EMAIL=' .env | tail -n 1 | cut -d '=' -f 2- | tr -d '"')"
 if [[ -z "$LETSENCRYPT_EMAIL" ]]; then
   echo "Missing LETSENCRYPT_EMAIL in .env" >&2
@@ -37,8 +40,7 @@ rsync -az --delete \
   --exclude ".git" \
   --exclude "node_modules" \
   --exclude "**/node_modules" \
-  --exclude "dist" \
-  --exclude "**/dist" \
+  --exclude "server/dist" \
   --exclude "coverage" \
   --exclude "**/coverage" \
   -e "$RSYNC_RSH" \
@@ -50,8 +52,8 @@ ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" "cd '$REMOTE_DIR' \
   && export PNPM_REGISTRY='$PNPM_REGISTRY' \
   && export APT_MIRROR_BASE='$APT_MIRROR_BASE' \
   && export APT_SECURITY_MIRROR='$APT_SECURITY_MIRROR' \
-  && cp deploy/nginx/http.conf deploy/nginx/active.conf \
-  && docker compose up -d --build postgres server client nginx"
+  && cat deploy/nginx/http.conf > deploy/nginx/active.conf \
+  && docker compose up -d --build --remove-orphans --force-recreate postgres server nginx"
 
 echo "Requesting or renewing Let's Encrypt certificate for $DOMAIN"
 ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" "cd '$REMOTE_DIR' \
@@ -72,8 +74,8 @@ ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" "cd '$REMOTE_DIR' \
   && export PNPM_REGISTRY='$PNPM_REGISTRY' \
   && export APT_MIRROR_BASE='$APT_MIRROR_BASE' \
   && export APT_SECURITY_MIRROR='$APT_SECURITY_MIRROR' \
-  && cp deploy/nginx/https.conf deploy/nginx/active.conf \
-  && docker compose up -d nginx \
+  && cat deploy/nginx/https.conf > deploy/nginx/active.conf \
+  && docker compose up -d --remove-orphans --force-recreate nginx \
   && docker compose exec -T nginx nginx -s reload"
 
 echo "Deployment completed."

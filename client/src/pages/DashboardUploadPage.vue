@@ -28,6 +28,7 @@ const pauseRequested = ref(false);
 const durationSeconds = ref<number | null>(null);
 const videoPreviewUrl = ref<string>("");
 const videoPosterDataUrl = ref<string>("");
+const previewVideoRef = ref<HTMLVideoElement | null>(null);
 const uploadHistory = ref<UploadHistoryItem[]>([]);
 const uploadRuntimeState = ref<"idle" | "uploading" | "paused">("idle");
 const loading = reactive({
@@ -253,6 +254,7 @@ async function uploadSelectedFile() {
     return;
   }
 
+  pausePreviewPlayback();
   loading.part = true;
   cancelRequested.value = false;
   pauseRequested.value = false;
@@ -595,12 +597,18 @@ async function readVideoPoster(file: File) {
 }
 
 function resetPreviewUrl() {
+  pausePreviewPlayback();
+
   if (!videoPreviewUrl.value) {
     return;
   }
 
   URL.revokeObjectURL(videoPreviewUrl.value);
   videoPreviewUrl.value = "";
+}
+
+function pausePreviewPlayback() {
+  previewVideoRef.value?.pause();
 }
 
 function terminateActiveWorkers() {
@@ -846,19 +854,24 @@ function formatDuration(totalSeconds: number) {
     <div class="upload-grid">
       <div class="dropzone-card">
         <div v-if="selectedFile" class="poster-panel">
-          <video
-            v-if="videoPreviewUrl"
-            :src="videoPreviewUrl"
-            :poster="videoPosterDataUrl || undefined"
-            class="preview-video"
-            controls
-            playsinline
-            preload="metadata"
-          />
-          <img v-else-if="videoPosterDataUrl" :src="videoPosterDataUrl" :alt="form.title || form.filename" class="poster-image" />
-          <div v-else class="poster-fallback">
-            <strong>{{ form.filename }}</strong>
-            <span>当前浏览器未能生成本地预览，可继续上传</span>
+          <div class="preview-media">
+            <video
+              v-if="videoPreviewUrl"
+              ref="previewVideoRef"
+              :src="videoPreviewUrl"
+              :poster="videoPosterDataUrl || undefined"
+              class="preview-video"
+              :class="{ 'preview-video-disabled': isUploading }"
+              :controls="!isUploading"
+              playsinline
+              preload="metadata"
+            />
+            <img v-else-if="videoPosterDataUrl" :src="videoPosterDataUrl" :alt="form.title || form.filename" class="poster-image" />
+            <div v-else class="poster-fallback">
+              <strong>{{ form.filename }}</strong>
+              <span>当前浏览器未能生成本地预览，可继续上传</span>
+            </div>
+            <div v-if="isUploading" class="preview-overlay">上传中，预览已锁定</div>
           </div>
           <button class="ghost-button" type="button" :disabled="isUploadLocked" @click="clearSelection">重新选择文件</button>
         </div>
@@ -1079,7 +1092,8 @@ h2 {
 
 .dropzone-card,
 .meta-card,
-.session-card {
+.session-card,
+.history-card {
   padding: 18px;
   border-radius: 22px;
   background: #f8fbff;
@@ -1097,6 +1111,10 @@ h2 {
   gap: 14px;
 }
 
+.preview-media {
+  position: relative;
+}
+
 .preview-video,
 .poster-image,
 .poster-fallback {
@@ -1110,6 +1128,23 @@ h2 {
   display: block;
   object-fit: contain;
   background: #020617;
+}
+
+.preview-video-disabled {
+  pointer-events: none;
+}
+
+.preview-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  padding: 24px;
+  border-radius: 18px;
+  background: rgba(2, 6, 23, 0.42);
+  color: white;
+  text-align: center;
+  pointer-events: none;
 }
 
 .poster-image {
@@ -1240,6 +1275,53 @@ h2 {
   color: #52606d;
 }
 
+.history-card {
+  margin-top: 18px;
+}
+
+.history-list {
+  display: grid;
+  gap: 12px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.history-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: white;
+}
+
+.history-copy {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.history-copy strong,
+.history-copy span {
+  color: #102a43;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.history-copy span {
+  color: #52606d;
+}
+
+.history-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 @media (max-width: 900px) {
   .upload-grid {
     grid-template-columns: 1fr;
@@ -1247,6 +1329,15 @@ h2 {
 
   .step-row {
     grid-template-columns: 1fr;
+  }
+
+  .history-item {
+    flex-direction: column;
+  }
+
+  .history-actions {
+    width: 100%;
+    justify-content: flex-start;
   }
 }
 </style>
