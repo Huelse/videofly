@@ -1,13 +1,16 @@
+import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
 
 import { prisma } from "../lib/prisma.js";
-import { hashPassword, signToken, verifyPassword } from "../lib/auth.js";
+import { createPasswordResetToken, hashPassword, hashResetToken, signToken, verifyPassword } from "../lib/auth.js";
+import { config } from "../config.js";
+import { HttpError } from "../lib/errors.js";
+import { requireAuth } from "../middleware/auth.js";
 
 const registerSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(8),
-  role: z.enum(["VIEWER", "UPLOADER", "ADMIN"]).optional()
+  password: z.string().min(8)
 });
 
 const loginSchema = z.object({
@@ -15,7 +18,17 @@ const loginSchema = z.object({
   password: z.string().min(8)
 });
 
+const resetPasswordRequestSchema = z.object({
+  email: z.string().email()
+});
+
+const resetPasswordSchema = z.object({
+  token: z.string().min(32),
+  password: z.string().min(8)
+});
+
 export const authRouter = Router();
+const passwordResetTokenStore = (prisma as typeof prisma & { passwordResetToken: any }).passwordResetToken;
 
 authRouter.post("/register", async (req, res, next) => {
   try {
@@ -25,8 +38,7 @@ authRouter.post("/register", async (req, res, next) => {
     const user = await prisma.user.create({
       data: {
         email: input.email,
-        passwordHash,
-        role: input.role ?? "VIEWER"
+        passwordHash
       },
       select: {
         id: true,
@@ -38,6 +50,9 @@ authRouter.post("/register", async (req, res, next) => {
 
     res.status(201).json(user);
   } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      return next(new HttpError(409, "Email already exists"));
+    }
     next(error);
   }
 });
@@ -70,6 +85,115 @@ authRouter.post("/login", async (req, res, next) => {
         role: user.role
       }
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+authRouter.post("/logout", requireAuth, (_req, res) => {
+  res.status(204).send();
+});
+
+authRouter.post("/reset-password", async (req, res, next) => {
+  try {
+    const input = resetPasswordRequestSchema.parse(req.body);
+    const requesterIp = req.ip;
+    const windowStart = new Date(Date.now() - 60 * 60 * 1000);
+
+    const requestsFromIp = await passwordResetTokenStore.count({
+      where: {
+        requesterIp,
+        createdAt: {
+          gte: windowStart
+        }
+      }
+    });
+
+    if (requestsFromIp >= config.PASSWORD_RESET_MAX_REQUESTS_PER_HOUR) {
+      throw new HttpError(429, "Too many reset attempts from this IP");
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email: input.email }
+    });
+
+    if (!user) {
+      return res.json({
+        message: "If the account exists, a password reset link has been generated."
+      });
+    }
+
+    const { token, tokenHash } = createPasswordResetToken();
+    const expiresAt = new Date(Date.now() + config.PASSWORD_RESET_WINDOW_MINUTES * 60 * 1000);
+
+    await prisma.$transaction([
+      passwordResetTokenStore.updateMany({
+        where: {
+          userId: user.id,
+          usedAt: null
+        },
+        data: {
+          usedAt: new Date()
+        }
+      }),
+      passwordResetTokenStore.create({
+        data: {
+          tokenHash,
+          expiresAt,
+          userId: user.id,
+          requesterIp
+        }
+      })
+    ]);
+
+    console.log(`Password reset URL for ${user.email}: ${config.APP_BASE_URL}/reset-password?token=${token}`);
+
+    return res.json({
+      message: "If the account exists, a password reset link has been generated."
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+authRouter.put("/reset-password", async (req, res, next) => {
+  try {
+    const input = resetPasswordSchema.parse(req.body);
+    const tokenHash = hashResetToken(input.token);
+
+    const resetRecord = await passwordResetTokenStore.findUnique({
+      where: { tokenHash },
+      include: { user: true }
+    });
+
+    if (!resetRecord || resetRecord.usedAt || resetRecord.expiresAt < new Date()) {
+      throw new HttpError(400, "Invalid or expired password reset token");
+    }
+
+    const passwordHash = await hashPassword(input.password);
+
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: resetRecord.userId },
+        data: { passwordHash }
+      }),
+      passwordResetTokenStore.update({
+        where: { id: resetRecord.id },
+        data: { usedAt: new Date() }
+      }),
+      passwordResetTokenStore.updateMany({
+        where: {
+          userId: resetRecord.userId,
+          usedAt: null,
+          id: {
+            not: resetRecord.id
+          }
+        },
+        data: { usedAt: new Date() }
+      })
+    ]);
+
+    return res.json({ message: "Password updated successfully" });
   } catch (error) {
     next(error);
   }

@@ -22,13 +22,14 @@ enum VideoStatus {
 }
 
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  passwordHash String
-  role         Role     @default(VIEWER)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  videos       Video[]
+  id                  String               @id @default(cuid())
+  email               String               @unique
+  passwordHash        String
+  role                Role                 @default(VIEWER)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  videos              Video[]
+  passwordResetTokens PasswordResetToken[]
 }
 
 model Video {
@@ -42,4 +43,17 @@ model Video {
   updatedAt   DateTime    @updatedAt
   uploaderId  String
   uploader    User        @relation(fields: [uploaderId], references: [id], onDelete: Cascade)
+}
+
+model PasswordResetToken {
+  id         String   @id @default(cuid())
+  tokenHash  String   @unique
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime @default(now())
+  userId     String
+  requesterIp String?
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
 }

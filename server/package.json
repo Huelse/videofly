@@ -8,6 +8,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "lint": "tsc --noEmit",
+    "test": "pnpm test:integration",
+    "test:integration": "DATABASE_URL=$(node scripts/test-db-url.mjs) prisma db push --skip-generate && DATABASE_URL=$(node scripts/test-db-url.mjs) vitest run --config vitest.config.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "tsx prisma/seed.ts"
@@ -27,8 +29,11 @@
     "@types/express": "^5.0.1",
     "@types/jsonwebtoken": "^9.0.9",
     "@types/node": "^22.14.1",
+    "@types/supertest": "^6.0.3",
     "prisma": "^6.6.0",
+    "supertest": "^7.1.1",
     "tsx": "^4.19.3",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
   }
 }
