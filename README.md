@@ -22,7 +22,6 @@
 
    ```bash
    cp .env.example .env
-   cp server/.env.example server/.env
    ```
 
 3. 启动 PostgreSQL

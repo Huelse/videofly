@@ -3,6 +3,7 @@ import request from "supertest";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
+import * as oss from "../src/lib/oss.js";
 import { prisma } from "../src/lib/prisma.js";
 import { createAuthHeader, createUser, resetDatabase, seedAdmin } from "./helpers.js";
 
@@ -16,6 +17,15 @@ const UPLOAD_SESSION_STATUS = {
 describe("upload integration", () => {
   beforeEach(async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(oss, "initMultipartUpload").mockResolvedValue("oss-upload-id");
+    vi.spyOn(oss, "getSignedUploadPartUrl").mockImplementation(async (_objectKey, _ossUploadId, partNumber) => ({
+      url: `https://oss.test/upload-part-${partNumber}`,
+      expiresInSeconds: 900,
+      method: "PUT"
+    }));
+    vi.spyOn(oss, "listUploadedParts").mockResolvedValue([{ number: 1, etag: "\"etag-1\"" }]);
+    vi.spyOn(oss, "completeMultipartUpload").mockResolvedValue({} as never);
+    vi.spyOn(oss, "abortMultipartUpload").mockResolvedValue({} as never);
     await resetDatabase();
     await seedAdmin();
   });
@@ -46,6 +56,13 @@ describe("upload integration", () => {
 
   it("allows uploaders to initialize, upload parts, inspect status and complete uploads", async () => {
     const uploader = await createUser("uploader@example.com", Role.UPLOADER);
+    vi.spyOn(oss, "listUploadedParts")
+      .mockResolvedValueOnce([{ number: 1, etag: "\"etag-1\"" }])
+      .mockResolvedValueOnce([
+        { number: 1, etag: "\"etag-1\"" },
+        { number: 2, etag: "\"etag-2\"" },
+        { number: 3, etag: "\"etag-3\"" }
+      ]);
 
     const initResponse = await request(app)
       .post("/api/v1/upload/init")
@@ -72,7 +89,8 @@ describe("upload integration", () => {
       .expect(200);
 
     expect(partResponse.body.status).toBe(UPLOAD_SESSION_STATUS.UPLOADING);
-    expect(partResponse.body.uploadedParts).toEqual([1]);
+    expect(partResponse.body.method).toBe("PUT");
+    expect(partResponse.body.url).toContain("upload-part-1");
 
     const statusResponse = await request(app)
       .get(`/api/v1/upload/status/${uploadId}`)

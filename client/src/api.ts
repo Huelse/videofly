@@ -37,6 +37,14 @@ export type UploadSessionState = {
   fileSizeBytes?: string;
 };
 
+export type UploadPartTicket = {
+  uploadId: string;
+  status: string;
+  url: string;
+  method: "PUT";
+  expiresInSeconds: number;
+};
+
 export type VideoItem = {
   id: string;
   title: string;

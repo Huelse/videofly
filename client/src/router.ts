@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from "vue-router";
 
 import { authStore } from "./stores/auth";
 import DashboardLayout from "./pages/DashboardLayout.vue";
+import DashboardOssFilesPage from "./pages/DashboardOssFilesPage.vue";
 import DashboardVideoDetailPage from "./pages/DashboardVideoDetailPage.vue";
 import DashboardUsersPage from "./pages/DashboardUsersPage.vue";
 import DashboardVideosPage from "./pages/DashboardVideosPage.vue";
@@ -55,6 +56,11 @@ const router = createRouter({
           component: DashboardUploadPage
         },
         {
+          path: "oss",
+          name: "dashboard-oss",
+          component: DashboardOssFilesPage
+        },
+        {
           path: "users",
           name: "dashboard-users",
           component: DashboardUsersPage
@@ -79,7 +85,7 @@ router.beforeEach(async (to) => {
     return { name: "dashboard-videos" };
   }
 
-  if (to.name === "dashboard-users" && authStore.currentUser.value?.role !== "ADMIN") {
+  if ((to.name === "dashboard-users" || to.name === "dashboard-oss") && authStore.currentUser.value?.role !== "ADMIN") {
     return { name: "dashboard-videos" };
   }
 

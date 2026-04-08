@@ -14,6 +14,7 @@ const navItems = computed(() => {
   ];
 
   if (authStore.isAdmin.value) {
+    items.push({ to: "/dashboard/oss", label: "OSS 文件管理" });
     items.push({ to: "/dashboard/users", label: "用户管理" });
   }
 

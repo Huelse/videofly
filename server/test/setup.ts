@@ -1,6 +1,6 @@
 import dotenv from "dotenv";
 
-dotenv.config({ path: new URL("../.env", import.meta.url) });
+dotenv.config({ path: new URL("../../.env", import.meta.url) });
 
 const testDatabaseUrl = new URL(process.env.DATABASE_URL!);
 testDatabaseUrl.searchParams.set("schema", "integration_test");
