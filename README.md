@@ -43,6 +43,73 @@
    pnpm dev
    ```
 
+## Docker Compose 部署
+
+项目现在支持通过 Docker Compose 在 Ubuntu 服务器直接运行完整服务，包含：
+
+- `postgres`: PostgreSQL 17
+- `server`: Express + Prisma API
+- `client`: Nginx 托管的 Vue 前端静态站点
+- `nginx`: 对外入口网关，绑定域名 `videofly.oini.top`，转发 `/` 到前端、`/api/*` 到 API，并承载 HTTPS
+- `certbot`: 通过 Let's Encrypt 申请和续期证书
+
+### 本地或服务器启动
+
+1. 准备 `.env`
+
+   ```bash
+   cp .env.example .env
+   ```
+
+2. 启动完整服务
+
+   ```bash
+   docker compose up -d --build
+   ```
+
+3. 查看状态
+
+   ```bash
+   docker compose ps
+   docker compose logs -f
+   ```
+
+默认由 `nginx` 服务对外暴露 `80` 端口。
+
+如果 DNS 已将 `videofly.oini.top` 指向服务器公网 IP，可直接访问：
+
+```text
+https://videofly.oini.top
+```
+
+### 一键发布到 Ubuntu 服务器
+
+仓库已提供部署脚本 [scripts/deploy.sh](/Users/max/projects/videofly/scripts/deploy.sh)，默认会发布到：
+
+- SSH: `root@42.121.218.102`
+- Key: `~/.ssh/platform-eng-2.pem`
+- Remote Dir: `/opt/videofly`
+- Domain: `videofly.oini.top`
+
+执行方式：
+
+```bash
+chmod +x scripts/deploy.sh
+./scripts/deploy.sh
+```
+
+首次申请 HTTPS 证书前，请确认：
+
+- `videofly.oini.top` 已解析到服务器公网 IP
+- 服务器安全组已放通 `80` 和 `443`
+- `.env` 中已配置 `LETSENCRYPT_EMAIL`
+
+如需覆盖默认值，可以临时传入：
+
+```bash
+REMOTE_HOST=root@42.121.218.102 REMOTE_DIR=/opt/videofly ./scripts/deploy.sh
+```
+
 ## 当前已提供的基础接口
 
 - `GET /api/v1/health`

@@ -7,10 +7,88 @@ services:
       POSTGRES_DB: videofly
       POSTGRES_USER: videofly
       POSTGRES_PASSWORD: videofly
-    ports:
-      - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U videofly -d videofly"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    container_name: videofly-server
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://videofly:videofly@postgres:5432/videofly?schema=public
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      PORT: 3000
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost}
+      PASSWORD_RESET_WINDOW_MINUTES: ${PASSWORD_RESET_WINDOW_MINUTES:-15}
+      PASSWORD_RESET_MAX_REQUESTS_PER_HOUR: ${PASSWORD_RESET_MAX_REQUESTS_PER_HOUR:-5}
+      OSS_REGION: ${OSS_REGION:?OSS_REGION is required}
+      OSS_BUCKET: ${OSS_BUCKET:?OSS_BUCKET is required}
+      OSS_ENDPOINT: ${OSS_ENDPOINT:?OSS_ENDPOINT is required}
+      OSS_ACCESS_KEY_ID: ${OSS_ACCESS_KEY_ID:?OSS_ACCESS_KEY_ID is required}
+      OSS_ACCESS_KEY_SECRET: ${OSS_ACCESS_KEY_SECRET:?OSS_ACCESS_KEY_SECRET is required}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/v1/health').then((res) => process.exit(res.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  client:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+      args:
+        VITE_API_BASE_URL: /api/v1
+    container_name: videofly-client
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: videofly-nginx
+    restart: unless-stopped
+    depends_on:
+      client:
+        condition: service_healthy
+      server:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx/active.conf:/etc/nginx/conf.d/default.conf:ro
+      - letsencrypt-data:/etc/letsencrypt
+      - certbot-webroot:/var/www/certbot
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  certbot:
+    image: certbot/certbot:latest
+    container_name: videofly-certbot
+    volumes:
+      - letsencrypt-data:/etc/letsencrypt
+      - certbot-webroot:/var/www/certbot
 
 volumes:
   postgres-data:
+  letsencrypt-data:
+  certbot-webroot:

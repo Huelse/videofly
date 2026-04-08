@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js",
+    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "start": "node dist/src/index.js",
     "lint": "tsc --noEmit",
     "test": "pnpm test:integration",
     "test:integration": "prisma generate && DATABASE_URL=$(node scripts/test-db-url.mjs) prisma db push --skip-generate && DATABASE_URL=$(node scripts/test-db-url.mjs) vitest run --config vitest.config.ts",
