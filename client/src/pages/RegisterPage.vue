@@ -2,6 +2,7 @@
 import { reactive, ref } from "vue";
 import { useRouter, RouterLink } from "vue-router";
 
+import { showAlert, showApiError } from "../lib/feedback";
 import { authStore } from "../stores/auth";
 
 const router = useRouter();
@@ -10,40 +11,38 @@ const form = reactive({
   password: "",
   confirmPassword: ""
 });
-const errorMessage = ref("");
 const loading = ref(false);
 
 async function submit() {
   const email = form.email.trim().toLowerCase();
 
   if (!email) {
-    errorMessage.value = "请输入邮箱";
+    await showAlert("请输入邮箱");
     return;
   }
 
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    errorMessage.value = "请输入有效邮箱地址";
+    await showAlert("请输入有效邮箱地址");
     return;
   }
 
   if (form.password.length < 8) {
-    errorMessage.value = "密码至少需要 8 位";
+    await showAlert("密码至少需要 8 位");
     return;
   }
 
   if (form.password !== form.confirmPassword) {
-    errorMessage.value = "两次输入的密码不一致";
+    await showAlert("两次输入的密码不一致");
     return;
   }
 
   loading.value = true;
-  errorMessage.value = "";
 
   try {
     await authStore.register(email, form.password);
     await router.push({ name: "dashboard-me" });
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : "注册失败";
+    showApiError(error, "注册失败");
   } finally {
     loading.value = false;
   }
@@ -76,8 +75,6 @@ async function submit() {
           {{ loading ? "注册中..." : "注册并进入后台" }}
         </button>
       </form>
-
-      <p v-if="errorMessage" class="error-text">{{ errorMessage }}</p>
       <p class="helper">
         已有账号？
         <RouterLink to="/login">去登录</RouterLink>
@@ -145,11 +142,6 @@ h1 {
   color: #fff;
   font: inherit;
   cursor: pointer;
-}
-
-.error-text {
-  margin-top: 16px;
-  color: #b91c1c;
 }
 
 .helper {

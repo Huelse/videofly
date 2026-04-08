@@ -3,6 +3,7 @@ import { computed, ref, watch } from "vue";
 
 import type { VideoDetail } from "../../api";
 import { apiBaseUrl, apiRequest } from "../../api";
+import { showApiError } from "../../lib/feedback";
 import { formatBytes } from "../../lib/storage";
 import { authStore } from "../../stores/auth";
 import { formatVideoStatus } from "../../video-status";
@@ -18,7 +19,6 @@ const emit = defineEmits<{
 
 const video = ref<VideoDetail | null>(null);
 const loading = ref(false);
-const errorMessage = ref("");
 const playbackErrorMessage = ref("");
 
 const dialogVisible = computed({
@@ -36,14 +36,13 @@ const playbackUrl = computed(() => {
 
 async function fetchVideoDetail(videoId: string) {
   loading.value = true;
-  errorMessage.value = "";
   playbackErrorMessage.value = "";
 
   try {
     video.value = await apiRequest<VideoDetail>(`/videos/${videoId}`, {}, authStore.token.value);
   } catch (error) {
     video.value = null;
-    errorMessage.value = error instanceof Error ? error.message : "视频详情获取失败";
+    showApiError(error, "视频详情获取失败");
   } finally {
     loading.value = false;
   }
@@ -63,7 +62,6 @@ watch(
     if (!visible || !videoId) {
       if (!visible) {
         video.value = null;
-        errorMessage.value = "";
         playbackErrorMessage.value = "";
       }
       return;
@@ -91,8 +89,7 @@ watch(
     </template>
 
     <div class="dialog-body">
-      <p v-if="errorMessage" class="error-text">{{ errorMessage }}</p>
-      <p v-else-if="loading" class="helper-text">视频详情加载中...</p>
+      <p v-if="loading" class="helper-text">视频详情加载中...</p>
 
       <div v-if="video" class="dialog-layout">
         <div class="player-card">

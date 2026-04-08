@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
+import { ElMessage } from "element-plus";
 
 import type { AuthUser, Role, UserListResponse } from "../../api";
 import { apiRequest } from "../../api";
+import { showAlert, showApiError } from "../../lib/feedback";
 import { formatBytes, parseQuotaGbToBytes, quotaBytesToGbInput } from "../../lib/storage";
 import { authStore } from "../../stores/auth";
 
 const users = ref<AuthUser[]>([]);
 const loading = ref(false);
-const errorMessage = ref("");
 const pendingUserId = ref("");
 const roleDialogVisible = ref(false);
 const quotaDialogVisible = ref(false);
@@ -24,13 +25,12 @@ const roleLabels: Record<Role, string> = {
 
 async function fetchUsers() {
   loading.value = true;
-  errorMessage.value = "";
 
   try {
     const response = await apiRequest<UserListResponse>("/users?page=1&pageSize=20", {}, authStore.token.value);
     users.value = response.items;
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : "用户获取失败";
+    showApiError(error, "用户获取失败");
   } finally {
     loading.value = false;
   }
@@ -42,7 +42,6 @@ async function updateRole(userId: string, role: Role) {
   }
 
   pendingUserId.value = userId;
-  errorMessage.value = "";
 
   try {
     await apiRequest(`/users/${userId}/role`, {
@@ -50,8 +49,9 @@ async function updateRole(userId: string, role: Role) {
       body: JSON.stringify({ role })
     }, authStore.token.value);
     await fetchUsers();
+    ElMessage.success("角色更新成功");
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : "角色更新失败";
+    showApiError(error, "角色更新失败");
   } finally {
     pendingUserId.value = "";
   }
@@ -64,12 +64,11 @@ async function updateQuota(userId: string) {
 
   const uploadQuotaBytes = parseQuotaGbToBytes(quotaDraft.value);
   if (uploadQuotaBytes === null) {
-    errorMessage.value = "请输入大于或等于 0 的额度（GB）";
+    await showAlert("请输入大于或等于 0 的额度（GB）");
     return;
   }
 
   pendingUserId.value = userId;
-  errorMessage.value = "";
 
   try {
     await apiRequest(`/users/${userId}/quota`, {
@@ -77,8 +76,9 @@ async function updateQuota(userId: string) {
       body: JSON.stringify({ uploadQuotaBytes })
     }, authStore.token.value);
     await fetchUsers();
+    ElMessage.success("上传额度更新成功");
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : "上传额度更新失败";
+    showApiError(error, "上传额度更新失败");
   } finally {
     pendingUserId.value = "";
   }
@@ -91,7 +91,6 @@ function openRoleDialog(user: AuthUser) {
 
   selectedUser.value = user;
   roleDraft.value = user.role;
-  errorMessage.value = "";
   roleDialogVisible.value = true;
 }
 
@@ -124,7 +123,6 @@ function openQuotaDialog(user: AuthUser) {
 
   selectedUser.value = user;
   quotaDraft.value = quotaBytesToGbInput(user.uploadQuotaBytes);
-  errorMessage.value = "";
   quotaDialogVisible.value = true;
 }
 
@@ -174,8 +172,6 @@ onMounted(fetchUsers);
         {{ loading ? "刷新中..." : "刷新列表" }}
       </button>
     </div>
-
-    <p v-if="errorMessage" class="error-text">{{ errorMessage }}</p>
 
     <div class="table-shell">
       <table>
@@ -376,10 +372,6 @@ td {
 
 .action-button {
   padding: 8px 12px;
-}
-
-.error-text {
-  color: #b91c1c;
 }
 
 .dialog-form {

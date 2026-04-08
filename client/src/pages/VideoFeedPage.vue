@@ -6,26 +6,25 @@ import type { VideoItem } from "../api";
 import { apiBaseUrl, apiRequest } from "../api";
 import VideoFeedDialog from "../components/video/VideoFeedDialog.vue";
 import VideoListCard from "../components/video/VideoListCard.vue";
+import { showApiError } from "../lib/feedback";
 import { formatBytes } from "../lib/storage";
 import { authStore } from "../stores/auth";
 
 const videos = ref<VideoItem[]>([]);
 const loading = ref(false);
-const errorMessage = ref("");
 const failedPreviewIds = ref(new Set<string>());
 const selectedVideoId = ref<string | null>(null);
 const dialogVisible = ref(false);
 
 async function fetchVideos() {
   loading.value = true;
-  errorMessage.value = "";
 
   try {
     const response = await apiRequest<{ items: VideoItem[] }>("/videos?scope=all&limit=10&random=true", {}, authStore.token.value);
     videos.value = response.items;
     failedPreviewIds.value = new Set();
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : "视频流获取失败";
+    showApiError(error, "视频流获取失败");
   } finally {
     loading.value = false;
   }
@@ -70,8 +69,6 @@ onMounted(fetchVideos);
       </div>
 
       <p class="helper-text">该页面会在新浏览器窗口打开，展示随机视频瀑布流。</p>
-      <p v-if="errorMessage" class="error-text">{{ errorMessage }}</p>
-
       <div v-if="!loading && videos.length === 0" class="empty-card">
         当前还没有可观看的视频
       </div>
@@ -180,11 +177,6 @@ h2 {
   background: #f8fbff;
   color: #52606d;
   text-align: center;
-}
-
-.error-text {
-  margin-bottom: 14px;
-  color: #b91c1c;
 }
 
 @media (max-width: 1080px) {

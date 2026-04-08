@@ -2,6 +2,7 @@ import { computed, ref } from "vue";
 
 import type { AuthUser, LoginResponse } from "../api";
 import { apiRequest, tokenStorageKey } from "../api";
+import { showApiError } from "../lib/feedback";
 
 const token = ref(localStorage.getItem(tokenStorageKey) ?? "");
 const currentUser = ref<AuthUser | null>(null);
@@ -20,7 +21,7 @@ async function fetchCurrentUser() {
     currentUser.value = null;
     token.value = "";
     localStorage.removeItem(tokenStorageKey);
-    statusMessage.value = error instanceof Error ? error.message : "登录态已失效";
+    statusMessage.value = showApiError(error, "登录态已失效");
   }
 }
 

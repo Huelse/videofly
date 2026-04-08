@@ -2,6 +2,7 @@
 import { reactive, ref } from "vue";
 import { useRouter, RouterLink } from "vue-router";
 
+import { showApiError } from "../lib/feedback";
 import { authStore } from "../stores/auth";
 
 const router = useRouter();
@@ -9,18 +10,16 @@ const form = reactive({
   email: "",
   password: ""
 });
-const errorMessage = ref("");
 const loading = ref(false);
 
 async function submit() {
   loading.value = true;
-  errorMessage.value = "";
 
   try {
     await authStore.login(form.email, form.password);
     await router.push({ name: "dashboard-me" });
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : "登录失败";
+    showApiError(error, "登录失败");
   } finally {
     loading.value = false;
   }
@@ -48,8 +47,6 @@ async function submit() {
           {{ loading ? "登录中..." : "登录并进入后台" }}
         </button>
       </form>
-
-      <p v-if="errorMessage" class="error-text">{{ errorMessage }}</p>
       <p class="helper">
         还没有账号？
         <RouterLink to="/register">去注册</RouterLink>
@@ -117,11 +114,6 @@ h1 {
   color: #fff;
   font: inherit;
   cursor: pointer;
-}
-
-.error-text {
-  margin-top: 16px;
-  color: #b91c1c;
 }
 
 .helper {

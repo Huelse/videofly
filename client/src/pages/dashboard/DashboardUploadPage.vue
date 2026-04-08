@@ -5,6 +5,7 @@ import { useRouter } from "vue-router";
 
 import type { UploadHistoryItem, UploadSessionState } from "../../api";
 import { apiBaseUrl, apiRequest } from "../../api";
+import { showApiError } from "../../lib/feedback";
 import { authStore } from "../../stores/auth";
 
 const router = useRouter();
@@ -283,7 +284,7 @@ async function initializeUpload() {
     message.value = `上传会话已创建：${uploadSession.value.uploadId}`;
     return uploadSession.value;
   } catch (error) {
-    message.value = error instanceof Error ? error.message : "上传初始化失败";
+    showApiError(error, "上传初始化失败");
     return null;
   } finally {
     loading.init = false;
@@ -434,7 +435,7 @@ async function uploadSelectedFile() {
     await fetchUploadHistory();
   } catch (error) {
     uploadRuntimeState.value = "idle";
-    message.value = error instanceof Error ? error.message : "分片上传失败";
+    showApiError(error, "分片上传失败");
   } finally {
     terminateActiveWorkers();
     loading.part = false;
@@ -532,7 +533,7 @@ async function cancelUpload() {
     await fetchUploadHistory();
     message.value = "上传已取消";
   } catch (error) {
-    message.value = error instanceof Error ? error.message : "取消上传失败";
+    showApiError(error, "取消上传失败");
   } finally {
     loading.cancel = false;
   }
@@ -715,7 +716,7 @@ async function fetchUploadHistory() {
     const response = await apiRequest<{ items: UploadHistoryItem[] }>("/upload/history", {}, authStore.token.value);
     uploadHistory.value = response.items;
   } catch (error) {
-    message.value = error instanceof Error ? error.message : "上传历史获取失败";
+    showApiError(error, "上传历史获取失败");
   } finally {
     loading.history = false;
   }
@@ -842,7 +843,7 @@ async function cancelHistoryUpload(item: UploadHistoryItem) {
     await fetchUploadHistory();
     message.value = `已取消历史会话：${item.uploadId}`;
   } catch (error) {
-    message.value = error instanceof Error ? error.message : "取消历史上传失败";
+    showApiError(error, "取消历史上传失败");
   } finally {
     loading.cancel = false;
   }

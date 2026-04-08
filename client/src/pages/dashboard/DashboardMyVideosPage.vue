@@ -4,24 +4,23 @@ import { onMounted, ref } from "vue";
 import type { VideoItem } from "../../api";
 import { apiBaseUrl, apiRequest } from "../../api";
 import VideoListCard from "../../components/video/VideoListCard.vue";
+import { showApiError } from "../../lib/feedback";
 import { formatBytes } from "../../lib/storage";
 import { authStore } from "../../stores/auth";
 
 const videos = ref<VideoItem[]>([]);
 const loading = ref(false);
-const errorMessage = ref("");
 const failedPreviewIds = ref(new Set<string>());
 
 async function fetchVideos() {
   loading.value = true;
-  errorMessage.value = "";
 
   try {
     const response = await apiRequest<{ items: VideoItem[] }>("/videos?scope=mine", {}, authStore.token.value);
     videos.value = response.items;
     failedPreviewIds.value = new Set();
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : "视频获取失败";
+    showApiError(error, "视频获取失败");
   } finally {
     loading.value = false;
   }
@@ -55,8 +54,6 @@ onMounted(fetchVideos);
         {{ loading ? "刷新中..." : "刷新列表" }}
       </button>
     </div>
-
-    <p v-if="errorMessage" class="error-text">{{ errorMessage }}</p>
 
     <div v-if="!loading && videos.length === 0" class="empty-card">
       当前还没有属于你的视频记录
@@ -129,11 +126,6 @@ h2 {
   background: #f8fbff;
   color: #52606d;
   text-align: center;
-}
-
-.error-text {
-  margin-bottom: 14px;
-  color: #b91c1c;
 }
 
 @media (max-width: 720px) {

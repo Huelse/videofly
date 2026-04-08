@@ -4,12 +4,12 @@ import { RouterLink } from "vue-router";
 
 import type { VideoItem } from "../../api";
 import { apiRequest } from "../../api";
+import { showApiError } from "../../lib/feedback";
 import { authStore } from "../../stores/auth";
 import { formatVideoStatus } from "../../video-status";
 
 const videos = ref<VideoItem[]>([]);
 const loading = ref(false);
-const errorMessage = ref("");
 const keyword = ref("");
 
 const filteredVideos = computed(() => {
@@ -28,13 +28,12 @@ const filteredVideos = computed(() => {
 
 async function fetchVideos() {
   loading.value = true;
-  errorMessage.value = "";
 
   try {
     const response = await apiRequest<{ items: VideoItem[] }>("/videos?scope=all", {}, authStore.token.value);
     videos.value = response.items;
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : "OSS 文件列表获取失败";
+    showApiError(error, "OSS 文件列表获取失败");
   } finally {
     loading.value = false;
   }
@@ -65,8 +64,6 @@ onMounted(fetchVideos);
         <strong>{{ filteredVideos.length }}</strong>
       </div>
     </div>
-
-    <p v-if="errorMessage" class="error-text">{{ errorMessage }}</p>
 
     <ul class="file-list">
       <li v-for="video in filteredVideos" :key="video.id" class="file-item">
@@ -218,8 +215,7 @@ h2 {
 
 .meta-line,
 .id-line,
-.empty-inline,
-.error-text {
+.empty-inline {
   margin: 0;
   color: #52606d;
 }
@@ -234,10 +230,6 @@ h2 {
   margin-top: 6px;
   font-family: "IBM Plex Mono", monospace;
   font-size: 0.85rem;
-}
-
-.error-text {
-  color: #b91c1c;
 }
 
 @media (max-width: 800px) {

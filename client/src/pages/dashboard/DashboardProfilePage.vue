@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { reactive, ref } from "vue";
+import { ElMessage } from "element-plus";
 
 import type { AuthUser, UserStorageUsage } from "../../api";
 import { apiRequest } from "../../api";
+import { showAlert, showApiError } from "../../lib/feedback";
 import { formatBytes } from "../../lib/storage";
 import { authStore } from "../../stores/auth";
 
 const loading = ref(false);
-const errorMessage = ref("");
-const successMessage = ref("");
 const user = ref<AuthUser | null>(null);
 const usage = ref<UserStorageUsage>({
   totalSizeBytes: "0",
@@ -19,7 +19,6 @@ const usage = ref<UserStorageUsage>({
 });
 const passwordDialogVisible = ref(false);
 const passwordSubmitting = ref(false);
-const passwordErrorMessage = ref("");
 const passwordForm = reactive({
   currentPassword: "",
   newPassword: "",
@@ -28,7 +27,6 @@ const passwordForm = reactive({
 
 async function fetchProfile() {
   loading.value = true;
-  errorMessage.value = "";
 
   try {
     const [currentUser, storageUsage] = await Promise.all([
@@ -39,7 +37,7 @@ async function fetchProfile() {
     user.value = currentUser;
     usage.value = storageUsage;
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : "我的信息获取失败";
+    showApiError(error, "我的信息获取失败");
   } finally {
     loading.value = false;
   }
@@ -47,13 +45,10 @@ async function fetchProfile() {
 
 function openPasswordDialog() {
   passwordDialogVisible.value = true;
-  passwordErrorMessage.value = "";
-  successMessage.value = "";
 }
 
 function resetPasswordForm() {
   passwordDialogVisible.value = false;
-  passwordErrorMessage.value = "";
   passwordForm.currentPassword = "";
   passwordForm.newPassword = "";
   passwordForm.confirmPassword = "";
@@ -68,11 +63,8 @@ function closePasswordDialog() {
 }
 
 async function submitPasswordChange() {
-  passwordErrorMessage.value = "";
-  successMessage.value = "";
-
   if (passwordForm.newPassword !== passwordForm.confirmPassword) {
-    passwordErrorMessage.value = "两次输入的新密码不一致";
+    await showAlert("两次输入的新密码不一致");
     return;
   }
 
@@ -91,10 +83,10 @@ async function submitPasswordChange() {
       authStore.token.value
     );
 
-    successMessage.value = response.message;
+    ElMessage.success(response.message);
     resetPasswordForm();
   } catch (error) {
-    passwordErrorMessage.value = error instanceof Error ? error.message : "密码修改失败";
+    showApiError(error, "密码修改失败");
   } finally {
     passwordSubmitting.value = false;
   }
@@ -114,9 +106,6 @@ void fetchProfile();
         {{ loading ? "刷新中..." : "刷新信息" }}
       </button>
     </div>
-
-    <p v-if="errorMessage" class="error-text">{{ errorMessage }}</p>
-    <p v-if="successMessage" class="success-text">{{ successMessage }}</p>
 
     <div class="panel-grid">
       <article class="info-card">
@@ -165,8 +154,6 @@ void fetchProfile();
           <span>确认新密码</span>
           <input v-model="passwordForm.confirmPassword" type="password" autocomplete="new-password" />
         </label>
-
-        <p v-if="passwordErrorMessage" class="error-text modal-error">{{ passwordErrorMessage }}</p>
       </div>
 
       <template #footer>
@@ -297,23 +284,6 @@ h2 {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-}
-
-.error-text,
-.success-text {
-  margin-bottom: 14px;
-}
-
-.error-text {
-  color: #b91c1c;
-}
-
-.success-text {
-  color: #15803d;
-}
-
-.modal-error {
-  margin: 0;
 }
 
 @media (max-width: 780px) {

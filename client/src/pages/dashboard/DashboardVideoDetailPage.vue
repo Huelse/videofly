@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import { ElMessageBox } from "element-plus";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import type { VideoDetail } from "../../api";
 import { apiBaseUrl, apiRequest } from "../../api";
+import { showApiError } from "../../lib/feedback";
 import { authStore } from "../../stores/auth";
 import { formatVideoStatus } from "../../video-status";
 
@@ -11,7 +13,6 @@ const route = useRoute();
 const router = useRouter();
 const video = ref<VideoDetail | null>(null);
 const loading = ref(false);
-const errorMessage = ref("");
 const playbackErrorMessage = ref("");
 const deleting = ref(false);
 const canDelete = computed(() => {
@@ -32,12 +33,11 @@ const playbackUrl = computed(() => {
 
 async function fetchVideo() {
   loading.value = true;
-  errorMessage.value = "";
 
   try {
     video.value = await apiRequest<VideoDetail>(`/videos/${route.params.id}`, {}, authStore.token.value);
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : "视频详情获取失败";
+    showApiError(error, "视频详情获取失败");
   } finally {
     loading.value = false;
   }
@@ -52,19 +52,25 @@ async function deleteVideo() {
     return;
   }
 
-  const confirmed = window.confirm(`确认删除《${video.value.title}》吗？视频会先从列表隐藏，OSS 文件会由后台定时清理。`);
-  if (!confirmed) {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除《${video.value.title}》吗？视频会先从列表隐藏，OSS 文件会由后台定时清理。`,
+      "删除确认",
+      {
+        type: "warning"
+      }
+    );
+  } catch {
     return;
   }
 
   deleting.value = true;
-  errorMessage.value = "";
 
   try {
     await apiRequest<null>(`/videos/${video.value.id}`, { method: "DELETE" }, authStore.token.value);
     await router.push("/feed");
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : "视频删除失败";
+    showApiError(error, "视频删除失败");
   } finally {
     deleting.value = false;
   }
@@ -105,8 +111,7 @@ onMounted(fetchVideo);
       <RouterLink class="ghost-link" to="/feed">返回视频流</RouterLink>
     </div>
 
-    <p v-if="errorMessage" class="error-text">{{ errorMessage }}</p>
-    <p v-else-if="loading" class="helper">加载中...</p>
+    <p v-if="loading" class="helper">加载中...</p>
 
     <div v-if="video" class="detail-layout">
       <div class="player-card">
