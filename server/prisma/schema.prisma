@@ -21,6 +21,13 @@ enum VideoStatus {
   DELETED
 }
 
+enum UploadSessionStatus {
+  INITIATED
+  UPLOADING
+  COMPLETED
+  CANCELED
+}
+
 model User {
   id                  String               @id @default(cuid())
   email               String               @unique
@@ -29,6 +36,7 @@ model User {
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
   videos              Video[]
+  uploadSessions      UploadSession[]
   passwordResetTokens PasswordResetToken[]
 }
 
@@ -56,4 +64,23 @@ model PasswordResetToken {
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, expiresAt])
+}
+
+model UploadSession {
+  id            String              @id @default(cuid())
+  title         String
+  filename      String
+  mimeType      String
+  fileSizeBytes BigInt
+  uploadId      String              @unique
+  ossKey        String?
+  partSizeBytes Int
+  uploadedParts Json                @default("[]")
+  status        UploadSessionStatus @default(INITIATED)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  uploaderId    String
+  uploader      User                @relation(fields: [uploaderId], references: [id], onDelete: Cascade)
+
+  @@index([uploaderId, createdAt])
 }

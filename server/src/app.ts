@@ -6,6 +6,7 @@ import { ZodError } from "zod";
 import { HttpError } from "./lib/errors.js";
 import { authRouter } from "./routes/auth.js";
 import { healthRouter } from "./routes/health.js";
+import { uploadRouter } from "./routes/upload.js";
 import { userRouter } from "./routes/users.js";
 import { videoRouter } from "./routes/videos.js";
 
@@ -18,6 +19,7 @@ export function createApp() {
   app.use("/api/v1", healthRouter);
   app.use("/api/v1/auth", authRouter);
   app.use("/api/v1/users", userRouter);
+  app.use("/api/v1/upload", uploadRouter);
   app.use("/api/v1", videoRouter);
 
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

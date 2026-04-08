@@ -5,6 +5,7 @@ import { prisma } from "../src/lib/prisma.js";
 
 export async function resetDatabase() {
   await prisma.video.deleteMany();
+  await (prisma as typeof prisma & { uploadSession: any }).uploadSession.deleteMany();
   await prisma.passwordResetToken.deleteMany();
   await prisma.user.deleteMany();
 }
@@ -12,8 +13,15 @@ export async function resetDatabase() {
 export async function seedAdmin() {
   const passwordHash = await hashPassword("Admin123!");
 
-  return prisma.user.create({
-    data: {
+  return prisma.user.upsert({
+    where: {
+      email: "admin@videofly.local"
+    },
+    update: {
+      passwordHash,
+      role: Role.ADMIN
+    },
+    create: {
       email: "admin@videofly.local",
       passwordHash,
       role: Role.ADMIN
