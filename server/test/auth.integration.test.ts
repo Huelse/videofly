@@ -55,6 +55,42 @@ describe("auth and user management integration", () => {
     expect(response.body.user.role).toBe(Role.ADMIN);
   });
 
+  it("rate limits registration attempts by IP", async () => {
+    for (let index = 0; index < 5; index += 1) {
+      await request(app)
+        .post("/api/v1/auth/register")
+        .set("X-Forwarded-For", "198.51.100.10")
+        .send({ email: `viewer-rate-${index}@example.com`, password: "Viewer1234" })
+        .expect(201);
+    }
+
+    const response = await request(app)
+      .post("/api/v1/auth/register")
+      .set("X-Forwarded-For", "198.51.100.10")
+      .send({ email: "viewer-rate-5@example.com", password: "Viewer1234" })
+      .expect(429);
+
+    expect(response.body.message).toBe("Too many registration attempts from this IP");
+  });
+
+  it("rate limits login attempts by IP", async () => {
+    for (let index = 0; index < 10; index += 1) {
+      await request(app)
+        .post("/api/v1/auth/login")
+        .set("X-Forwarded-For", "198.51.100.11")
+        .send({ email: "admin@videofly.local", password: "wrong-pass-123" })
+        .expect(401);
+    }
+
+    const response = await request(app)
+      .post("/api/v1/auth/login")
+      .set("X-Forwarded-For", "198.51.100.11")
+      .send({ email: "admin@videofly.local", password: "Admin123!" })
+      .expect(429);
+
+    expect(response.body.message).toBe("Too many login attempts from this IP");
+  });
+
   it("returns the current user for an authenticated request", async () => {
     const viewer = await createUser("viewer-me@example.com");
 
@@ -192,6 +228,26 @@ describe("auth and user management integration", () => {
     expect(tokens).toHaveLength(1);
     expect(tokens[0].usedAt).toBeNull();
     consoleSpy.mockRestore();
+  });
+
+  it("rate limits password reset requests by IP", async () => {
+    await createUser("viewer-reset-rate@example.com");
+
+    for (let index = 0; index < 5; index += 1) {
+      await request(app)
+        .post("/api/v1/auth/reset-password")
+        .set("X-Forwarded-For", "198.51.100.12")
+        .send({ email: "viewer-reset-rate@example.com" })
+        .expect(200);
+    }
+
+    const response = await request(app)
+      .post("/api/v1/auth/reset-password")
+      .set("X-Forwarded-For", "198.51.100.12")
+      .send({ email: "viewer-reset-rate@example.com" })
+      .expect(429);
+
+    expect(response.body.message).toBe("Too many password reset requests from this IP");
   });
 
   it("resets the password using a valid token", async () => {

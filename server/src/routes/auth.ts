@@ -7,6 +7,7 @@ import { createPasswordResetToken, hashPassword, hashResetToken, signToken, veri
 import { config } from "../config.js";
 import { HttpError } from "../lib/errors.js";
 import { requireAuth } from "../middleware/auth.js";
+import { createIpRateLimiter } from "../middleware/rate-limit.js";
 import { serializeUser } from "../lib/users.js";
 
 const registerSchema = z.object({
@@ -30,8 +31,26 @@ const resetPasswordSchema = z.object({
 
 export const authRouter = Router();
 const passwordResetTokenStore = (prisma as typeof prisma & { passwordResetToken: any }).passwordResetToken;
+const registerRateLimiter = createIpRateLimiter({
+  keyPrefix: "auth:register",
+  limit: config.AUTH_RATE_LIMIT_REGISTER_MAX_REQUESTS,
+  windowSeconds: config.AUTH_RATE_LIMIT_WINDOW_SECONDS,
+  message: "Too many registration attempts from this IP"
+});
+const loginRateLimiter = createIpRateLimiter({
+  keyPrefix: "auth:login",
+  limit: config.AUTH_RATE_LIMIT_LOGIN_MAX_REQUESTS,
+  windowSeconds: config.AUTH_RATE_LIMIT_WINDOW_SECONDS,
+  message: "Too many login attempts from this IP"
+});
+const resetPasswordRateLimiter = createIpRateLimiter({
+  keyPrefix: "auth:reset-password",
+  limit: config.AUTH_RATE_LIMIT_RESET_PASSWORD_MAX_REQUESTS,
+  windowSeconds: config.AUTH_RATE_LIMIT_WINDOW_SECONDS,
+  message: "Too many password reset requests from this IP"
+});
 
-authRouter.post("/register", async (req, res, next) => {
+authRouter.post("/register", registerRateLimiter, async (req, res, next) => {
   try {
     const input = registerSchema.parse(req.body);
     const passwordHash = await hashPassword(input.password);
@@ -59,7 +78,7 @@ authRouter.post("/register", async (req, res, next) => {
   }
 });
 
-authRouter.post("/login", async (req, res, next) => {
+authRouter.post("/login", loginRateLimiter, async (req, res, next) => {
   try {
     const input = loginSchema.parse(req.body);
     const user = await prisma.user.findUnique({ where: { email: input.email } });
@@ -92,7 +111,7 @@ authRouter.post("/logout", requireAuth, (_req, res) => {
   res.status(204).send();
 });
 
-authRouter.post("/reset-password", async (req, res, next) => {
+authRouter.post("/reset-password", resetPasswordRateLimiter, async (req, res, next) => {
   try {
     const input = resetPasswordRequestSchema.parse(req.body);
     const requesterIp = req.ip;
@@ -154,7 +173,7 @@ authRouter.post("/reset-password", async (req, res, next) => {
   }
 });
 
-authRouter.put("/reset-password", async (req, res, next) => {
+authRouter.put("/reset-password", resetPasswordRateLimiter, async (req, res, next) => {
   try {
     const input = resetPasswordSchema.parse(req.body);
     const tokenHash = hashResetToken(input.token);

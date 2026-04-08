@@ -124,6 +124,7 @@ export const openApiDocument = {
             content: jsonContent(ref("User"))
           },
           "400": errorResponse("Validation failed"),
+          "429": errorResponse("Too many registration attempts"),
           "409": errorResponse("Email already exists")
         }
       }
@@ -143,7 +144,8 @@ export const openApiDocument = {
             content: jsonContent(ref("LoginResponse"))
           },
           "400": errorResponse("Validation failed"),
-          "401": errorResponse("Invalid credentials")
+          "401": errorResponse("Invalid credentials"),
+          "429": errorResponse("Too many login attempts")
         }
       }
     },
@@ -192,7 +194,8 @@ export const openApiDocument = {
             description: "Password updated",
             content: jsonContent(ref("MessageResponse"))
           },
-          "400": errorResponse("Validation failed or token is invalid")
+          "400": errorResponse("Validation failed or token is invalid"),
+          "429": errorResponse("Too many password reset requests")
         }
       }
     },

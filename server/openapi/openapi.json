@@ -150,6 +150,16 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Too many registration attempts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -194,6 +204,16 @@
           },
           "401": {
             "description": "Invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many login attempts",
             "content": {
               "application/json": {
                 "schema": {
@@ -313,6 +333,16 @@
           },
           "400": {
             "description": "Validation failed or token is invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many password reset requests",
             "content": {
               "application/json": {
                 "schema": {
